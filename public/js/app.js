@@ -1608,6 +1608,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
           const paths = [...(goal.paths || []), result.path];
           await api(`/api/goals/${goalId}`, { method: 'PUT', body: { paths } });
           await loadGoals();
+          if (currentView.value === 'goals') loadGoalStats();
         }
       } catch (e) {
         console.error('addGoalPath error:', e);
@@ -1631,6 +1632,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       const paths = (goal.paths || []).filter((_, i) => i !== index);
       await api(`/api/goals/${goalId}`, { method: 'PUT', body: { paths } });
       await loadGoals();
+      if (currentView.value === 'goals') loadGoalStats();
     }
 
     // 任务路径管理
