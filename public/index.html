@@ -255,7 +255,7 @@
                     :class="{ active: filterTagIds.includes(tag.id) }"
                     :style="filterTagIds.includes(tag.id) ? { background: tag.color + '20', borderColor: tag.color, color: tag.color } : {}"
                     @click="toggleTagFilter(tag.id)">
-              {{ tag.name }}
+              {{ tag.icon }}{{ tag.name }}
             </button>
           </div>
         </div>
@@ -349,7 +349,7 @@
                 <div class="task-card-tags" v-if="task.tags && task.tags.length">
                   <span class="tag-pill" v-for="tag in task.tags" :key="tag.id"
                         :style="{ background: tag.color + '18', color: tag.color, borderColor: tag.color + '40' }">
-                    {{ tag.name }}
+                    {{ tag.icon }}{{ tag.name }}
                   </span>
                 </div>
                 <div class="task-card-people" v-if="task.people && task.people.length">
@@ -772,15 +772,6 @@
           <!-- 当前编辑的配置 -->
           <div class="ai-config-edit" v-if="aiConfigs[activeAIConfig]">
             <div class="form-group">
-              <label>快速预设</label>
-              <div class="provider-presets">
-                <button class="preset-btn" @click="applyPresetToConfig('deepseek')">DeepSeek</button>
-                <button class="preset-btn" @click="applyPresetToConfig('glm')">GLM / 智谱</button>
-                <button class="preset-btn" @click="applyPresetToConfig('qwen')">通义千问</button>
-                <button class="preset-btn" @click="applyPresetToConfig('ollama')">Ollama 本地</button>
-              </div>
-            </div>
-            <div class="form-group">
               <label>配置名称</label>
               <input type="text" v-model="aiConfigs[activeAIConfig].name" class="input" placeholder="如 DeepSeek V4">
             </div>
@@ -820,18 +811,21 @@
           <h3 class="settings-section-title">💻 终端</h3>
           <div class="form-group">
             <label>终端程序</label>
-            <input type="text" v-model="settings.terminal_path" class="input" @blur="saveSettings" placeholder="Mac: Terminal / iTerm / Windows: cmd">
-            <p class="form-hint">Mac 填应用名如 Terminal 或 iTerm；Windows 填 cmd 或完整路径</p>
+            <div style="display:flex;gap:8px">
+              <input type="text" v-model="settings.terminal_path" class="input" @blur="saveSettings" placeholder="Mac: Terminal / iTerm / Windows: cmd" style="flex:1">
+              <button class="btn btn-sm" @click="pickFileFor('terminal')">📂 选择</button>
+              <button class="btn btn-sm" @click="settings.terminal_path = ''; saveSettings()" v-if="settings.terminal_path">✕</button>
+            </div>
+            <p class="form-hint">选择终端可执行文件，Mac 可选 .app 如 Terminal 或 iTerm，Windows 选 .exe 如 cmd.exe</p>
           </div>
           <div class="form-group">
             <label>笔记编辑器</label>
-            <select v-model="settings.editor" class="select-input" @change="saveSettings">
-              <option value="Obsidian">Obsidian</option>
-              <option value="Typora">Typora</option>
-              <option value="VSCode">VS Code</option>
-              <option value="Finder">Finder</option>
-            </select>
-            <p class="form-hint">打开任务笔记时使用的编辑器</p>
+            <div style="display:flex;gap:8px">
+              <input type="text" v-model="settings.editor" class="input" @blur="saveSettings" placeholder="如 Obsidian / Typora / VS Code" style="flex:1">
+              <button class="btn btn-sm" @click="pickFileFor('editor')">📂 选择</button>
+              <button class="btn btn-sm" @click="settings.editor = ''; saveSettings()" v-if="settings.editor">✕</button>
+            </div>
+            <p class="form-hint">选择编辑器可执行文件，Mac 可选 .app</p>
           </div>
           </div>
 
@@ -840,11 +834,13 @@
           <div class="tags-editor">
             <div class="tag-editor-item" v-for="tag in tags" :key="tag.id">
               <input type="color" v-model="tag.color" class="color-input" @change="updateTag(tag)">
+              <input type="text" v-model="tag.icon" class="input tag-icon-input" @blur="updateTag(tag)" placeholder="🏷" maxlength="4" style="width:40px;text-align:center" :title="tag.icon">
               <span class="tag-dimension">{{ tag.dimension === 'urgency' ? '紧迫度' : '价值' }}</span>
               <input type="text" v-model="tag.name" class="input tag-name-input" @blur="updateTag(tag)">
               <button class="btn-icon btn-danger-icon" @click="removeTag(tag.id)">×</button>
             </div>
             <div class="tag-editor-add">
+              <input type="text" v-model="newTagIcon" class="input" placeholder="🏷" maxlength="4" style="width:48px;text-align:center">
               <input type="text" v-model="newTagName" class="input" placeholder="新标签名">
               <select v-model="newTagDimension" class="select-input">
                 <option value="urgency">紧迫度</option>
@@ -876,8 +872,8 @@
             <input type="text" v-model="contactForm.employee_id" class="input" placeholder="工号(选填)">
             <input type="email" v-model="contactForm.email" class="input" placeholder="邮箱(选填)">
             <input type="text" v-model="contactForm.relationship" class="input" placeholder="关系(选填)">
-            <button class="btn btn-sm btn-primary" @click="saveContact">{{ editingContactId ? '更新联系人' : '添加联系人' }}</button>
-            <button class="btn btn-sm" v-if="editingContactId" @click="editingContactId = null; Object.assign(contactForm, { name: '', employee_id: '', email: '', relationship: '' })">取消编辑</button>
+            <button class="btn btn-primary" style="width:100%" @click="saveContact">{{ editingContactId ? '更新联系人' : '添加联系人' }}</button>
+            <button class="btn" style="width:100%" v-if="editingContactId" @click="editingContactId = null; Object.assign(contactForm, { name: '', employee_id: '', email: '', relationship: '' })">取消编辑</button>
           </div>
           </div>
 
@@ -954,7 +950,7 @@
                 <span class="tag-pill selectable" v-for="(tid, ti) in aiSuggestions.tag_ids" :key="tid"
                       :style="{ background: (tags.find(t=>t.id===tid)?.color||'#888')+'18', color: tags.find(t=>t.id===tid)?.color||'var(--text-3)' }"
                       @click="aiSuggestions.tag_ids.splice(ti, 1)">
-                  {{ tags.find(t => t.id === tid)?.name || tid }} ×
+                  {{ tags.find(t => t.id === tid)?.icon }}{{ tags.find(t => t.id === tid)?.name || tid }} ×
                 </span>
               </span>
             </div>
@@ -1036,7 +1032,7 @@
                   :class="{ selected: isTaskTagged(tag.id) }"
                   :style="isTaskTagged(tag.id) ? { background: tag.color + '20', color: tag.color, borderColor: tag.color } : {}"
                   @click="toggleTaskTag(tag.id)">
-              {{ tag.name }}
+              {{ tag.icon }}{{ tag.name }}
             </span>
           </div>
         </div>
@@ -1341,7 +1337,7 @@
                     :class="{ selected: newTask.tag_ids && newTask.tag_ids.includes(tag.id) }"
                     :style="newTask.tag_ids && newTask.tag_ids.includes(tag.id) ? { background: tag.color + '20', color: tag.color, borderColor: tag.color } : {}"
                     @click="toggleNewTaskTag(tag.id)">
-                {{ tag.name }}
+                {{ tag.icon }}{{ tag.name }}
               </span>
             </div>
           </div>

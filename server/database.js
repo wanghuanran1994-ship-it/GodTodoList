@@ -75,6 +75,7 @@ function createTables() {
     name TEXT NOT NULL,
     dimension TEXT DEFAULT 'urgency',
     color TEXT DEFAULT '#6b7280',
+    icon TEXT DEFAULT '',
     sort_order INTEGER DEFAULT 0
   )`);
 
@@ -175,6 +176,7 @@ function createTables() {
     updated_at TEXT
   )`);
   try { db.run('ALTER TABLE tasks ADD COLUMN paths TEXT DEFAULT "[]"'); } catch (e) {}
+  try { db.run('ALTER TABLE tags ADD COLUMN icon TEXT DEFAULT ""'); } catch (e) {}
 
   // 笔记卡片
   db.run(`CREATE TABLE IF NOT EXISTS note_cards (
@@ -622,11 +624,11 @@ function getTags() {
 }
 
 function createTag(d) {
-  db.run('INSERT INTO tags (name, dimension, color, sort_order) VALUES (?, ?, ?, ?)',
-    [d.name, d.dimension, d.color || '#6b7280', d.sort_order || 0]);
+  db.run('INSERT INTO tags (name, dimension, color, icon, sort_order) VALUES (?, ?, ?, ?, ?)',
+    [d.name, d.dimension, d.color || '#6b7280', d.icon || '', d.sort_order || 0]);
   save();
   const id = queryOne('SELECT last_insert_rowid() as id').id;
-  return { id, name: d.name, dimension: d.dimension, color: d.color || '#6b7280' };
+  return { id, name: d.name, dimension: d.dimension, color: d.color || '#6b7280', icon: d.icon || '' };
 }
 
 function updateTag(id, d) {
@@ -635,6 +637,7 @@ function updateTag(id, d) {
   if (d.name !== undefined) { fields.push('name = ?'); params.push(d.name); }
   if (d.color !== undefined) { fields.push('color = ?'); params.push(d.color); }
   if (d.dimension !== undefined) { fields.push('dimension = ?'); params.push(d.dimension); }
+  if (d.icon !== undefined) { fields.push('icon = ?'); params.push(d.icon); }
   if (fields.length === 0) return;
   params.push(id);
   db.run(`UPDATE tags SET ${fields.join(', ')} WHERE id = ?`, params);

@@ -162,6 +162,7 @@ createApp({
     // 标签管理
     const newTagName = ref('');
     const newTagDimension = ref('value');
+    const newTagIcon = ref('');
 
     // 人员
     const newPerson = ref('');
@@ -963,9 +964,10 @@ createApp({
       if (!newTagName.value.trim()) return;
       await api('/api/tags', {
         method: 'POST',
-        body: { name: newTagName.value, dimension: newTagDimension.value }
+        body: { name: newTagName.value, dimension: newTagDimension.value, icon: newTagIcon.value }
       });
       newTagName.value = '';
+      newTagIcon.value = '';
       await loadTags();
     }
 
@@ -977,7 +979,7 @@ createApp({
     async function updateTag(tag) {
       await api(`/api/tags/${tag.id}`, {
         method: 'PUT',
-        body: { name: tag.name, dimension: tag.dimension, color: tag.color }
+        body: { name: tag.name, dimension: tag.dimension, color: tag.color, icon: tag.icon }
       });
       await loadTags();
     }
@@ -1412,23 +1414,6 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
 
     // ==================== AI 多模型配置 ====================
 
-    const aiPresetTemplates = {
-      deepseek: { provider: 'openai', base_url: 'https://api.deepseek.com', model: 'deepseek-chat', name: 'DeepSeek' },
-      glm: { provider: 'anthropic', base_url: 'https://open.bigmodel.cn/api/anthropic', model: 'glm-5.1', name: 'GLM' },
-      qwen: { provider: 'openai', base_url: 'https://dashscope.aliyuncs.com/compatible-mode', model: 'qwen-plus', name: '通义千问' },
-      ollama: { provider: 'openai', base_url: 'http://localhost:11434', model: 'qwen2.5:7b', name: 'Ollama' },
-    };
-
-    function applyPresetToConfig(presetName) {
-      const t = aiPresetTemplates[presetName];
-      const cfg = aiConfigs.value[activeAIConfig.value];
-      if (!t || !cfg) return;
-      cfg.provider = t.provider;
-      cfg.base_url = t.base_url;
-      cfg.model = t.model;
-      if (!cfg.api_key) cfg.name = t.name;
-    }
-
     function addAIConfig() {
       aiConfigs.value.push({ name: '新模型', provider: 'openai', base_url: '', model: '', api_key: '', x_token: '' });
       activeAIConfig.value = aiConfigs.value.length - 1;
@@ -1665,6 +1650,17 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         if (result && result.path) {
           if (refKey === 'rootDir') settings.root_dir = result.path;
           else if (refKey === 'importDir') importDir.value = result.path;
+        }
+      } catch (e) {}
+    }
+
+    async function pickFileFor(refKey) {
+      try {
+        const result = await api('/api/pick-file', { method: 'POST' });
+        if (result && result.path) {
+          if (refKey === 'terminal') settings.terminal_path = result.path;
+          else if (refKey === 'editor') settings.editor = result.path;
+          saveSettings();
         }
       } catch (e) {}
     }
@@ -2222,7 +2218,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       importSelectedCount, importSelectedAll,
       scanImportDir, toggleImportAll, executeImport,
       editingGoal, editingRoutine, goalForm, routineForm,
-      newTask, newTagName, newTagDimension, newPerson,
+      newTask, newTagName, newTagDimension, newTagIcon, newPerson,
       timeLogDuration, timeLogNote,
       isDragging, fileInput,
       statsDays, timeStats, goalStats,
@@ -2248,11 +2244,11 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       loadTimeStats, loadReview, barHeight,
       saveSettings,
       aiConfigs, activeAIConfig, addAIConfig, removeAIConfig, switchAIModel, saveAIConfigs, aiConfigSaved, showAIConfigJson, aiConfigsJson,
-      applyPresetToConfig, testAIConnection, aiTestResult,
+      testAIConnection, aiTestResult,
       statusLabel, freqLabel, isOverdue, formatDate, formatChartDate,
       fileIcon, formatSize,
       goalTaskFolders, openFolderFor,
-      pickFolderFor, refreshGoalPaths, addGoalPath, removeGoalPath, addTaskPath, removeTaskPath,
+      pickFolderFor, pickFileFor, refreshGoalPaths, addGoalPath, removeGoalPath, addTaskPath, removeTaskPath,
       onPathDragStart, onPathDragOver, onPathDrop, setPrimaryPath,
       pathReadmeStatus, checkPathReadme, checkAllPathReadmes,
       expandedProgress, dragPathIndex, dragPathOverIndex,

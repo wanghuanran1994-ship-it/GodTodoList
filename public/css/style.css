@@ -1419,34 +1419,6 @@ a { color: var(--primary); text-decoration: none; }
 
 .btn-xs { padding: 3px 8px; font-size: var(--text-xs); }
 
-/* ==================== AI 预设按钮 ==================== */
-.provider-presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 4px;
-}
-.preset-btn {
-  padding: 6px 14px;
-  font-size: var(--text-sm);
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--card);
-  color: var(--text-2);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.preset-btn:hover {
-  border-color: var(--primary);
-  color: var(--primary);
-}
-.preset-btn.active {
-  background: var(--primary-light);
-  border-color: var(--primary);
-  color: var(--primary);
-  font-weight: 600;
-}
-
 /* ==================== AI 配置卡片 ==================== */
 .ai-config-list {
   display: flex;

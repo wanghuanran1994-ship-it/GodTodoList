@@ -530,6 +530,36 @@ app.post('/api/pick-folder', asyncHandler(async (req, res) => {
   res.json({ path: folderPath });
 }));
 
+app.post('/api/pick-file', asyncHandler(async (req, res) => {
+  const platform = process.platform;
+  let filePath = '';
+  try {
+    if (platform === 'darwin') {
+      filePath = execSync(`osascript -e 'choose file' -e 'POSIX path of result'`, { encoding: 'utf-8', timeout: 60000 }).trim();
+    } else if (platform === 'win32') {
+      const outFile = path.join(os.tmpdir(), `godtodo_pick_file_${Date.now()}.txt`);
+      const ps1Script = path.join(os.tmpdir(), `godtodo_pick_file_${Date.now()}.ps1`);
+      const psCode = `Add-Type -AssemblyName System.Windows.Forms\r\n$d = New-Object System.Windows.Forms.OpenFileDialog\r\n$d.Filter = "可执行文件 (*.exe;*.bat;*.cmd)|*.exe;*.bat;*.cmd|所有文件 (*.*)|*.*"\r\nif ($d.ShowDialog() -eq 'OK') { [System.IO.File]::WriteAllText('${outFile.replace(/\\/g, '\\\\')}', $d.FileName, [System.Text.Encoding]::UTF8) }`;
+      fs.writeFileSync(ps1Script, psCode, 'utf-8');
+      try {
+        execSync(`powershell -NoProfile -ExecutionPolicy Bypass -STA -File "${ps1Script}"`, { timeout: 60000 });
+        if (fs.existsSync(outFile)) {
+          filePath = fs.readFileSync(outFile, 'utf-8').trim();
+        }
+      } finally {
+        try { fs.unlinkSync(ps1Script); } catch (e) {}
+        try { fs.unlinkSync(outFile); } catch (e) {}
+      }
+    } else {
+      filePath = execSync('zenity --file-selection 2>/dev/null || echo ""', { encoding: 'utf-8', timeout: 60000 }).trim();
+    }
+  } catch (e) {
+    return res.json({ cancelled: true });
+  }
+  if (!filePath) return res.json({ cancelled: true });
+  res.json({ path: filePath });
+}));
+
 app.post('/api/attachments/open', asyncHandler(async (req, res) => {
   const filePath = req.body.file_path;
   if (!filePath) return res.status(400).json({ error: '缺少文件路径' });
