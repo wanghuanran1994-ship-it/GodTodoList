@@ -809,7 +809,7 @@
             </div>
             <div class="ai-config-save-row">
               <button class="btn btn-primary" @click="saveAIConfigs">💾 保存配置</button>
-              <button class="btn btn-sm" @click="testAIConnection">🔌 测试连接</button>
+              <button class="btn" @click="testAIConnection">🔌 测试连接</button>
               <span class="form-hint" v-if="aiTestResult">{{ aiTestResult }}</span>
               <span class="form-hint ai-saved-hint" v-if="aiConfigSaved">已保存</span>
             </div>
