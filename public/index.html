@@ -15,6 +15,10 @@
           <span class="logo-icon">✦</span>
           <span class="logo-text" v-show="!sidebarCollapsed">GodTodoList</span>
         </div>
+        <div class="week-info" v-show="!sidebarCollapsed" :title="'今年还剩 ' + weekInfo.remaining + ' 天'">
+          <span class="week-num">第 {{ weekInfo.week }}/{{ weekInfo.total }} 周</span>
+          <span class="week-remain">剩 {{ weekInfo.remaining }} 天</span>
+        </div>
         <button class="sidebar-toggle" @click="sidebarCollapsed = !sidebarCollapsed" :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'">
           {{ sidebarCollapsed ? '▶' : '◀' }}
         </button>
@@ -708,7 +712,16 @@
         <div class="view-header">
           <h1 class="view-title">设置</h1>
         </div>
+        <div class="settings-tabs">
+          <button class="settings-tab" :class="{ active: settingsTab === 'files' }" @click="settingsTab = 'files'">📁 文件管理</button>
+          <button class="settings-tab" :class="{ active: settingsTab === 'ai' }" @click="settingsTab = 'ai'">🤖 AI 配置</button>
+          <button class="settings-tab" :class="{ active: settingsTab === 'terminal' }" @click="settingsTab = 'terminal'">💻 终端</button>
+          <button class="settings-tab" :class="{ active: settingsTab === 'tags' }" @click="settingsTab = 'tags'">🏷️ 标签</button>
+          <button class="settings-tab" :class="{ active: settingsTab === 'contacts' }" @click="settingsTab = 'contacts'">👥 联系人</button>
+          <button class="settings-tab" :class="{ active: settingsTab === 'backup' }" @click="settingsTab = 'backup'">💾 备份</button>
+        </div>
         <div class="settings-form">
+          <div v-show="settingsTab === 'files'">
           <h3 class="settings-section-title">📁 文件管理</h3>
           <div class="form-group">
             <label>任务文件夹根目录</label>
@@ -732,7 +745,9 @@
               <span class="toggle-slider"></span>
             </label>
           </div>
+          </div>
 
+          <div v-show="settingsTab === 'ai'">
           <h3 class="settings-section-title">🤖 AI 模型配置</h3>
           <p class="form-hint" style="margin-bottom:12px">配置文件：<code>data/ai-config.json</code></p>
           <div class="ai-config-list">
@@ -799,7 +814,9 @@
               <span class="form-hint ai-saved-hint" v-if="aiConfigSaved">已保存</span>
             </div>
           </div>
+          </div>
 
+          <div v-show="settingsTab === 'terminal'">
           <h3 class="settings-section-title">💻 终端</h3>
           <div class="form-group">
             <label>终端程序</label>
@@ -816,7 +833,9 @@
             </select>
             <p class="form-hint">打开任务笔记时使用的编辑器</p>
           </div>
+          </div>
 
+          <div v-show="settingsTab === 'tags'">
           <h3 class="settings-section-title">🏷️ 自定义标签</h3>
           <div class="tags-editor">
             <div class="tag-editor-item" v-for="tag in tags" :key="tag.id">
@@ -834,7 +853,9 @@
               <button class="btn btn-sm" @click="addTag">添加</button>
             </div>
           </div>
+          </div>
 
+          <div v-show="settingsTab === 'contacts'">
           <h3 class="settings-section-title">👥 联系人管理</h3>
           <div class="contact-list" v-if="contacts.length">
             <div class="contact-item" v-for="c in contacts" :key="c.id">
@@ -858,12 +879,15 @@
             <button class="btn btn-sm btn-primary" @click="saveContact">{{ editingContactId ? '更新联系人' : '添加联系人' }}</button>
             <button class="btn btn-sm" v-if="editingContactId" @click="editingContactId = null; Object.assign(contactForm, { name: '', employee_id: '', email: '', relationship: '' })">取消编辑</button>
           </div>
+          </div>
 
+          <div v-show="settingsTab === 'backup'">
           <h3 class="settings-section-title">💾 数据备份</h3>
           <div class="backup-section">
             <button class="btn" @click="downloadBackup">📥 下载数据库备份</button>
             <button class="btn" @click="restoreBackup">📤 恢复数据库</button>
             <p class="form-hint">备份为 .db 文件，包含所有任务、目标、联系人等数据</p>
+          </div>
           </div>
         </div>
       </div>

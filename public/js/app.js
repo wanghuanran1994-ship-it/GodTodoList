@@ -48,6 +48,7 @@ createApp({
     const batchSelected = ref([]);
     const batchStatus = ref('');
     const batchGoalId = ref(null);
+    const settingsTab = ref('files');
 
     function toggleBatchSelect(taskId) {
       const idx = batchSelected.value.indexOf(taskId);
@@ -236,6 +237,27 @@ createApp({
     const quickInputText = ref('');
     const aiSuggestions = ref(null);
     const aiEnriching = ref(false);
+
+    // 周数 & 剩余天数
+    function getISOWeek(d) {
+      const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      const dayNum = date.getUTCDay() || 7;
+      date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+      const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+      return Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+    }
+    function getTotalWeeks(year) {
+      const dec31 = new Date(year, 11, 31);
+      return getISOWeek(dec31);
+    }
+    const weekInfo = computed(() => {
+      const today = new Date();
+      const week = getISOWeek(today);
+      const total = getTotalWeeks(today.getFullYear());
+      const yearEnd = new Date(today.getFullYear(), 11, 31);
+      const remaining = Math.ceil((yearEnd - today) / 86400000);
+      return { week, total, remaining };
+    });
 
     // Calendar
     const now = new Date();
@@ -2256,6 +2278,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       // Batch
       batchMode, batchSelected, batchStatus, batchGoalId,
       toggleBatchSelect, applyBatchStatus, applyBatchGoal, batchToggleToday, batchDelete,
+      settingsTab,
       // Subtask/parent helpers
       subtaskDoneCount, subtaskPercent, childTaskCount,
       // Kanban drag
@@ -2283,6 +2306,8 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       // Report
       aiReportContent, aiGeneratingReport, generateReport, copyReportText,
       reportHistory, selectedReport, loadReports, deleteReport, copyReportContent,
+      // Week info
+      weekInfo,
     };
   }
 }).mount('#app');
