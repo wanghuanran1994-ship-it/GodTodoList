@@ -503,8 +503,21 @@ app.post('/api/pick-folder', asyncHandler(async (req, res) => {
     if (platform === 'darwin') {
       folderPath = execSync(`osascript -e 'choose folder' -e 'POSIX path of result'`, { encoding: 'utf-8', timeout: 60000 }).trim();
     } else if (platform === 'win32') {
-      const psScript = `Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = '选择文件夹'; $f.ShowDialog() | Out-Null; $f.SelectedPath`;
-      folderPath = execSync(`powershell -NoProfile -ExecutionPolicy Bypass -STA -Command "${psScript.replace(/"/g, '\\"')}"`, { encoding: 'utf-8', timeout: 60000 }).trim();
+      // 使用 VBScript + Shell.Application 调用原生文件夹选择器，兼容所有 Windows 版本
+      // 输出写入临时文件（UTF-8），避免控制台编码问题
+      const outFile = path.join(os.tmpdir(), `godtodo_pick_${Date.now()}.txt`);
+      const vbsScript = path.join(os.tmpdir(), `godtodo_pick_${Date.now()}.vbs`);
+      const vbsCode = `Set objShell = CreateObject("Shell.Application")\r\nSet objFolder = objShell.BrowseForFolder(0, "选择文件夹", 0, 0)\r\nIf Not objFolder Is Nothing Then\r\nSet stream = CreateObject("ADODB.Stream")\r\nstream.Type = 2\r\nstream.Charset = "utf-8"\r\nstream.Open\r\nstream.WriteText objFolder.Self.Path\r\nstream.SaveToFile "${outFile.replace(/\\/g, '\\\\')}", 2\r\nstream.Close\r\nEnd If`;
+      fs.writeFileSync(vbsScript, vbsCode, 'utf-8');
+      try {
+        execSync(`cscript //NoLogo //B "${vbsScript}"`, { timeout: 60000 });
+        if (fs.existsSync(outFile)) {
+          folderPath = fs.readFileSync(outFile, 'utf-8').trim();
+        }
+      } finally {
+        try { fs.unlinkSync(vbsScript); } catch (e) {}
+        try { fs.unlinkSync(outFile); } catch (e) {}
+      }
     } else {
       // Linux: try zenity
       folderPath = execSync('zenity --file-selection --directory 2>/dev/null || echo ""', { encoding: 'utf-8', timeout: 60000 }).trim();
