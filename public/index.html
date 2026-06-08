@@ -15,10 +15,6 @@
           <span class="logo-icon">✦</span>
           <span class="logo-text" v-show="!sidebarCollapsed">GodTodoList</span>
         </div>
-        <div class="week-info" v-show="!sidebarCollapsed" :title="'今年还剩 ' + weekInfo.remaining + ' 天'">
-          <span class="week-num">第 {{ weekInfo.week }}/{{ weekInfo.total }} 周</span>
-          <span class="week-remain">剩 {{ weekInfo.remaining }} 天</span>
-        </div>
         <button class="sidebar-toggle" @click="sidebarCollapsed = !sidebarCollapsed" :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'">
           {{ sidebarCollapsed ? '▶' : '◀' }}
         </button>
@@ -74,6 +70,10 @@
 
       <!-- 侧边栏底部 -->
       <div class="sidebar-footer" v-show="!sidebarCollapsed">
+        <div class="week-info" :title="'今年还剩 ' + weekInfo.remaining + ' 天'">
+          <span class="week-num">第 {{ weekInfo.week }}/{{ weekInfo.total }} 周</span>
+          <span class="week-remain">剩 {{ weekInfo.remaining }} 天</span>
+        </div>
         <div class="nav-item" @click="toggleDarkMode" :title="darkMode ? '切换亮色模式' : '切换深色模式'">
           <span class="nav-icon">{{ darkMode ? '☀️' : '🌙' }}</span>
           <span class="nav-label">{{ darkMode ? '亮色模式' : '深色模式' }}</span>
