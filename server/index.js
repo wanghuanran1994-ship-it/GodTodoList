@@ -987,8 +987,8 @@ function proxyAnthropic(baseUrl, model, apiKey, allMessages, res) {
   const fullUrl = base.endsWith('/v1') ? base + '/messages' : base + '/v1/messages';
   const url = new URL(fullUrl);
 
-  // Anthropic 使用 system 字段而非 system message
-  const systemContent = allMessages.find(m => m.role === 'system')?.content || '';
+  // Anthropic 使用 system 字段而非 system message，合并多条 system 消息
+  const systemContent = allMessages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
   const chatMessages = allMessages.filter(m => m.role !== 'system');
 
   const postData = JSON.stringify({
