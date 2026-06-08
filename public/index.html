@@ -499,8 +499,12 @@
                 <span class="path-name" @click="openFolderFor(f.folder_path)">{{ f.folder_name }}</span>
                 <span class="path-task-link">← {{ f.task_title }}</span>
                 <button class="btn btn-xs" @click="openFolderFor(f.folder_path)">打开</button>
+                <button class="btn btn-xs" @click="goToTask(f.task_id)" :title="'查看任务: ' + f.task_title">📋</button>
               </div>
-              <button class="btn btn-xs" @click="addGoalPath(stat.id)">＋ 添加路径</button>
+              <div style="display:flex;gap:4px">
+                <button class="btn btn-xs" @click="addGoalPath(stat.id)">＋ 添加路径</button>
+                <button class="btn btn-xs" @click="refreshGoalPaths(stat.id)" title="自动识别关联任务的目录">🔄 刷新</button>
+              </div>
             </div>
             <div class="goal-card-actions">
               <button class="btn btn-sm" @click="editGoal(stat)">编辑</button>

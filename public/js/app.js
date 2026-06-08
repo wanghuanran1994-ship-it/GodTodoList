@@ -1594,6 +1594,27 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         }));
     }
 
+    async function refreshGoalPaths(goalId) {
+      const goal = goals.value.find(g => g.id === goalId);
+      if (!goal) return;
+      // 收集该目标下所有任务的目录路径
+      const taskFolders = goalTaskFolders(goalId).map(f => f.folder_path);
+      // 合并去重
+      const existing = new Set(goal.paths || []);
+      let added = false;
+      for (const p of taskFolders) {
+        if (!existing.has(p)) {
+          existing.add(p);
+          added = true;
+        }
+      }
+      if (added) {
+        await api(`/api/goals/${goalId}`, { method: 'PUT', body: { paths: [...existing] } });
+        await loadGoals();
+        if (currentView.value === 'goals') loadGoalStats();
+      }
+    }
+
     async function openFolderFor(folderPath) {
       await api('/api/open-folder', { method: 'POST', body: { path: folderPath } });
     }
@@ -2209,7 +2230,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       statusLabel, freqLabel, isOverdue, formatDate, formatChartDate,
       fileIcon, formatSize,
       goalTaskFolders, openFolderFor,
-      pickFolderFor, addGoalPath, removeGoalPath, addTaskPath, removeTaskPath,
+      pickFolderFor, refreshGoalPaths, addGoalPath, removeGoalPath, addTaskPath, removeTaskPath,
       onPathDragStart, onPathDragOver, onPathDrop, setPrimaryPath,
       pathReadmeStatus, checkPathReadme, checkAllPathReadmes,
       expandedProgress, dragPathIndex, dragPathOverIndex,
