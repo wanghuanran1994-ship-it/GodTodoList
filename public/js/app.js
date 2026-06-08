@@ -163,6 +163,16 @@ createApp({
     const newTagName = ref('');
     const newTagDimension = ref('value');
     const newTagIcon = ref('');
+    const emojiPickerFor = ref(null);
+    const commonEmojis = '🔥 ⭐ 🚀 💡 📌 🎯 ⚡ 🔔 💼 📊 🏠 📝 🔧 🛠 📋 🏷 🎨 💬 🧠 🎵 📚 🗂 🔍 ⚙️ 💰 📅 🏃 🎪 🔮 🧩 🏆 🎭 🌟 💎 🕐 📢 🗣 🌍 💻 🎓 🧪 🛡️ 🔑 📎 ✨ 💪 🤝 🎁 🏗 🧹 📈 🧲 💊 🔬 📡 🏥 🚧 🎲 📖 🖊️ ✅ ❌ ❓ 💭 🗳️ 📨 🔗 🧭 🪜 🎻'.split(' ');
+    function selectTagEmoji(target, emoji) {
+      if (target === 'new') newTagIcon.value = emoji;
+      else {
+        const tag = tags.value.find(t => t.id === target);
+        if (tag) { tag.icon = emoji; updateTag(tag); }
+      }
+      emojiPickerFor.value = null;
+    }
 
     // 人员
     const newPerson = ref('');
@@ -2013,6 +2023,11 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
     // 启动定时刷新计时器显示
     onMounted(async () => {
       document.addEventListener('keydown', handleKeydown);
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('.emoji-pick-btn') && !e.target.closest('.emoji-grid')) {
+          emojiPickerFor.value = null;
+        }
+      });
       await loadAll();
       timerInterval = setInterval(() => {
         if (activeTimers.value.length > 0) refreshTimers();
@@ -2276,7 +2291,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       importSelectedCount, importSelectedAll,
       scanImportDir, toggleImportAll, executeImport,
       editingGoal, editingRoutine, goalForm, routineForm,
-      newTask, newTagName, newTagDimension, newTagIcon, newPerson,
+      newTask, newTagName, newTagDimension, newTagIcon, emojiPickerFor, commonEmojis, selectTagEmoji, newPerson,
       timeLogDuration, timeLogNote,
       isDragging, fileInput,
       statsDays, timeStats, goalStats,

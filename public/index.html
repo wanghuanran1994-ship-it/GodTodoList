@@ -838,13 +838,25 @@
           <div class="tags-editor">
             <div class="tag-editor-item" v-for="tag in tags" :key="tag.id">
               <input type="color" v-model="tag.color" class="color-input" @change="updateTag(tag)">
-              <input type="text" v-model="tag.icon" class="input tag-icon-input" @blur="updateTag(tag)" placeholder="🏷" maxlength="4" style="width:40px;text-align:center" :title="tag.icon">
+              <div style="position:relative">
+                <button class="emoji-pick-btn" @click="emojiPickerFor = emojiPickerFor === tag.id ? null : tag.id"
+                        :title="tag.icon || '选择图标'">{{ tag.icon || '☺' }}</button>
+                <div class="emoji-grid" v-if="emojiPickerFor === tag.id" @click.stop>
+                  <button class="emoji-option" v-for="e in commonEmojis" :key="e" @click="selectTagEmoji(tag.id, e)">{{ e }}</button>
+                </div>
+              </div>
               <span class="tag-dimension">{{ tag.dimension === 'urgency' ? '紧迫度' : '价值' }}</span>
               <input type="text" v-model="tag.name" class="input tag-name-input" @blur="updateTag(tag)">
               <button class="btn-icon btn-danger-icon" @click="removeTag(tag.id)">×</button>
             </div>
             <div class="tag-editor-add">
-              <input type="text" v-model="newTagIcon" class="input" placeholder="🏷" maxlength="4" style="width:48px;text-align:center">
+              <div style="position:relative">
+                <button class="emoji-pick-btn" @click="emojiPickerFor = emojiPickerFor === 'new' ? null : 'new'"
+                        :title="newTagIcon || '选择图标'">{{ newTagIcon || '☺' }}</button>
+                <div class="emoji-grid" v-if="emojiPickerFor === 'new'" @click.stop>
+                  <button class="emoji-option" v-for="e in commonEmojis" :key="e" @click="selectTagEmoji('new', e)">{{ e }}</button>
+                </div>
+              </div>
               <input type="text" v-model="newTagName" class="input" placeholder="新标签名">
               <select v-model="newTagDimension" class="select-input">
                 <option value="urgency">紧迫度</option>

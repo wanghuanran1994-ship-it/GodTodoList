@@ -1288,6 +1288,54 @@ a { color: var(--primary); text-decoration: none; }
 .tag-editor-add .input { flex: 1; }
 .tag-editor-add .select-input { width: 100px; }
 
+.emoji-pick-btn {
+  width: 34px;
+  height: 34px;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  cursor: pointer;
+  font-size: var(--text-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+.emoji-pick-btn:hover { border-color: var(--primary); background: var(--primary-light); }
+
+.emoji-grid {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  width: 280px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.emoji-option {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--text-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s;
+}
+.emoji-option:hover { background: var(--primary-light); }
+
 /* ==================== 动画 ==================== */
 @keyframes fadeIn {
   from { opacity: 0; }
@@ -2450,6 +2498,8 @@ body.dark .calendar-cell:hover { background: var(--card-hover); }
 body.dark .settings-tab { color: var(--text-4); }
 body.dark .settings-tab:hover { color: var(--primary-light); }
 body.dark .settings-tab.active { color: var(--primary-light); border-bottom-color: var(--primary-light); }
+body.dark .emoji-pick-btn { background: var(--bg); border-color: var(--border); }
+body.dark .emoji-grid { background: var(--card); }
 
 /* ==================== 深色模式滚动条 ==================== */
 body.dark ::-webkit-scrollbar-thumb { background: var(--border); }
