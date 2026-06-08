@@ -165,6 +165,28 @@ createApp({
     const newTagIcon = ref('');
     const emojiPickerFor = ref(null);
     const commonEmojis = '🔥 ⭐ 🚀 💡 📌 🎯 ⚡ 🔔 💼 📊 🏠 📝 🔧 🛠 📋 🏷 🎨 💬 🧠 🎵 📚 🗂 🔍 ⚙️ 💰 📅 🏃 🎪 🔮 🧩 🏆 🎭 🌟 💎 🕐 📢 🗣 🌍 💻 🎓 🧪 🛡️ 🔑 📎 ✨ 💪 🤝 🎁 🏗 🧹 📈 🧲 💊 🔬 📡 🏥 🚧 🎲 📖 🖊️ ✅ ❌ ❓ 💭 🗳️ 📨 🔗 🧭 🪜 🎻'.split(' ');
+    const emojiSuggest = {
+      '紧急': '🔥', '重要': '⭐', '高优': '🚀', 'bug': '🐛', '修复': '🔧',
+      '学习': '📚', '研究': '🔬', '调研': '🔍', '文档': '📝', '写作': '✍️',
+      '会议': '📋', '汇报': '📊', '周报': '📅', '月报': '📈', '复盘': '🔄',
+      '设计': '🎨', '开发': '💻', '测试': '🧪', '部署': '🚀', '运维': '🛠',
+      '数据': '📊', '分析': '🧠', '实验': '🧪', '优化': '⚡', '性能': '⚡',
+      '安全': '🛡️', '沟通': '💬', '协作': '🤝', '评审': '👀', '审核': '✅',
+      '规划': '🗺️', '目标': '🎯', '项目': '📋', '需求': '📝', '产品': '💎',
+      '健康': '💪', '运动': '🏃', '生活': '🏠', '财务': '💰', '理财': '💵',
+      '阅读': '📖', '写作': '🖊️', '翻译': '🌍', '管理': '⚙️', '组织': '🗂',
+      '跟进': '📌', '备忘': '📎', '灵感': '💡', '创意': '🎭', '娱乐': '🎵',
+      '日常': '📅', '提醒': '🔔', '待办': '✅', '完成': '🎉', '阻塞': '🚧',
+      '依赖': '🔗', '工具': '🔑', '通知': '📢', '存档': '🗄️', '废弃': '🗑️',
+      '讲师': '🎓', '培训': '🏫', '分享': '📤', '想法': '💭', '创新': '🔮',
+    };
+    function guessEmoji(name) {
+      if (!name) return '';
+      for (const [kw, emoji] of Object.entries(emojiSuggest)) {
+        if (name.includes(kw)) return emoji;
+      }
+      return '';
+    }
     function selectTagEmoji(target, emoji) {
       if (target === 'new') newTagIcon.value = emoji;
       else {
@@ -367,6 +389,13 @@ createApp({
 
     async function loadTags() {
       tags.value = await api('/api/tags');
+      // 为没有图标的已有标签自动匹配图标
+      for (const tag of tags.value) {
+        if (!tag.icon) {
+          tag.icon = guessEmoji(tag.name);
+          if (tag.icon) updateTag(tag);
+        }
+      }
     }
 
     async function loadSettings() {
@@ -977,9 +1006,10 @@ createApp({
 
     async function addTag() {
       if (!newTagName.value.trim()) return;
+      const icon = newTagIcon.value || guessEmoji(newTagName.value);
       await api('/api/tags', {
         method: 'POST',
-        body: { name: newTagName.value, dimension: newTagDimension.value, icon: newTagIcon.value }
+        body: { name: newTagName.value, dimension: newTagDimension.value, icon }
       });
       newTagName.value = '';
       newTagIcon.value = '';
@@ -992,9 +1022,10 @@ createApp({
     }
 
     async function updateTag(tag) {
+      const icon = tag.icon || guessEmoji(tag.name);
       await api(`/api/tags/${tag.id}`, {
         method: 'PUT',
-        body: { name: tag.name, dimension: tag.dimension, color: tag.color, icon: tag.icon }
+        body: { name: tag.name, dimension: tag.dimension, color: tag.color, icon }
       });
       await loadTags();
     }
