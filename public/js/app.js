@@ -1628,6 +1628,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         if (showQuickAdd.value) showQuickAdd.value = false;
         else if (showGoalModal.value) showGoalModal.value = false;
         else if (showRoutineModal.value) showRoutineModal.value = false;
+        else if (showAIChat.value) closeAIChat();
         else if (selectedTask.value) closeDetail();
       }
     }
