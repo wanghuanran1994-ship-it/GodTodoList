@@ -763,7 +763,7 @@ createApp({
             try {
               const json = JSON.parse(data);
               const d = json.choices?.[0]?.delta;
-              fullContent += (d?.reasoning_content || '') + (d?.content || '');
+              fullContent += (d?.content || '');
             } catch (e) {}
           }
           aiReportContent.value = fullContent;
@@ -1212,15 +1212,13 @@ createApp({
 
     const pressureAnalysis = ref('');
     const analyzingPressure = ref(false);
+    const pressureChatMode = ref(false);
 
-    async function analyzePressure() {
-      analyzingPressure.value = true;
-      pressureAnalysis.value = '';
-      try {
-        const active = tasks.value.filter(t => t.status === 'in-progress' || t.status === 'todo');
-        const overdue = tasks.value.filter(t => t.due_date && isOverdue(t.due_date) && t.status !== 'done' && t.status !== 'shelved');
-        const shelved = tasks.value.filter(t => t.status === 'shelved');
-        const prompt = `你是一位资深技术管理顾问。请根据以下工作数据，帮我分析当前压力来源，并指出破局关键。
+    function buildPressurePrompt() {
+      const active = tasks.value.filter(t => t.status === 'in-progress' || t.status === 'todo');
+      const overdue = tasks.value.filter(t => t.due_date && isOverdue(t.due_date) && t.status !== 'done' && t.status !== 'shelved');
+      const shelved = tasks.value.filter(t => t.status === 'shelved');
+      return `你是一位资深技术管理顾问。请根据以下工作数据，帮我分析当前压力来源，并指出破局关键。
 
 ## 我的目标
 ${goals.value.map(g => `- ${g.name}${g.description ? '：' + g.description : ''}`).join('\n') || '无'}
@@ -1234,50 +1232,34 @@ ${overdue.map(t => `- ${t.title} 截止:${t.due_date}`).join('\n') || '无'}
 ## 搁置
 ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
 
-请从以下角度分析（简洁，每条不要太长）：
+请从以下角度分析并和我讨论（简洁，每条不要太长）：
 1. **核心压力来源**：哪些任务/目标组合造成了最大的认知负荷和时间压力？
 2. **隐藏风险**：是否有被忽视但可能爆发的问题？
 3. **破局关键**：哪个点一旦突破，其他问题会连锁缓解？给出具体可操作的建议。
 4. **优先级重排建议**：当前任务应该如何重新排序？
 
-请用中文回答，Markdown 格式（用标题和列表），控制在 300 字以内。`;
+请用中文回答，Markdown 格式。我们可以多轮讨论直到确定最终策略。`;
+    }
 
-        const configs = aiConfigs.value;
-        const idx = activeAIConfig.value || 0;
-        const cfg = configs[idx];
-        if (!cfg || !cfg.base_url) throw new Error('请先配置 AI 模型');
+    async function analyzePressure() {
+      const prompt = buildPressurePrompt();
+      // 打开 AI 军师面板，预填 prompt
+      aiMessages.value = [];
+      aiInput.value = prompt;
+      showAIChat.value = true;
+      pressureChatMode.value = true;
+      await nextTick();
+      sendAIMessage();
+    }
 
-        const res = await fetch('/api/ai/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: [{ role: 'user', content: prompt }] }),
-        });
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let full = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
-          for (const line of lines) {
-            const tl = line.trim();
-            if (!tl.startsWith('data:')) continue;
-            const data = tl.substring(tl.indexOf(':') + 1).trim();
-            if (data === '[DONE]') continue;
-            try {
-              const json = JSON.parse(data);
-              const d = json.choices?.[0]?.delta;
-              full += (d?.reasoning_content || '') + (d?.content || '');
-            } catch (e) {}
-          }
-          pressureAnalysis.value = full;
-        }
-      } catch (e) {
-        pressureAnalysis.value = '分析失败: ' + e.message;
+    function savePressureAnalysis() {
+      // 取最后一条 assistant 消息保存到压力面板
+      const lastAI = [...aiMessages.value].reverse().find(m => m.role === 'assistant');
+      if (lastAI) {
+        pressureAnalysis.value = lastAI.content;
+        pressureChatMode.value = false;
+        showAIChat.value = false;
       }
-      analyzingPressure.value = false;
     }
 
     async function loadGoalStats() {
@@ -1763,6 +1745,12 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
     function clearAIChat() {
       aiMessages.value = [];
       aiStreamContent.value = '';
+      pressureChatMode.value = false;
+    }
+
+    function closeAIChat() {
+      showAIChat.value = false;
+      pressureChatMode.value = false;
     }
 
     async function sendAIMessage() {
@@ -1811,7 +1799,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
               try {
                 const json = JSON.parse(data);
                 const d = json.choices?.[0]?.delta;
-                const delta = (d?.reasoning_content || '') + (d?.content || '');
+                const delta = (d?.content || '');
                 if (delta) {
                   fullContent += delta;
                   aiStreamContent.value = fullContent;
@@ -2225,7 +2213,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       expandedProgress, dragPathIndex, dragPathOverIndex,
       openDirBrowser,
       launchTerminal,
-      clearAIChat, sendAIMessage, sendAIPrompt, renderMarkdown,
+      clearAIChat, closeAIChat, sendAIMessage, sendAIPrompt, renderMarkdown,
       // Timer
       activeTimers, startTaskTimer, stopTaskTimer, isTimerActive, getTimerElapsed, formatTime,
       // Today
@@ -2250,7 +2238,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       // Kanban drag
       onKanbanDragStart, onKanbanDragOver, onKanbanDragLeave, onKanbanDrop,
       // Dashboard
-      upcomingDeadlines, recentCompleted, pressureTasks, pressureAnalysis, analyzingPressure, analyzePressure,
+      upcomingDeadlines, recentCompleted, pressureTasks, pressureAnalysis, analyzingPressure, analyzePressure, pressureChatMode, savePressureAnalysis,
       // Reports
       filterReportOnly, reportMeetings, loadReportMeetings, groupedReportTasks,
       // Conversations

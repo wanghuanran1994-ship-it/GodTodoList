@@ -150,14 +150,15 @@
             <div class="dash-panel">
               <div class="dash-panel-header">
                 <h3>🔥 压力来源</h3>
-                <button class="btn btn-xs btn-primary" @click="analyzePressure" :disabled="analyzingPressure">
-                  {{ analyzingPressure ? '分析中...' : '🤖 AI 分析' }}
+                <button class="btn btn-xs btn-primary" @click="analyzePressure">
+                  🤖 与军师讨论
                 </button>
               </div>
               <div class="dash-task-list" v-if="pressureAnalysis">
                 <div class="pressure-analysis-content" v-html="renderMarkdown(pressureAnalysis)"></div>
+                <button class="btn btn-xs" style="margin-top:8px" @click="analyzePressure">🔄 重新讨论</button>
               </div>
-              <div class="dash-empty" v-else>点击「AI 分析」让军师帮你梳理压力来源和破局关键</div>
+              <div class="dash-empty" v-else>点击「与军师讨论」通过多轮对话梳理压力来源和破局关键</div>
             </div>
           </div>
 
@@ -1472,8 +1473,9 @@
           </select>
         </div>
         <div class="ai-chat-header-actions">
+          <button v-if="pressureChatMode" class="btn btn-xs btn-primary" @click="savePressureAnalysis" title="保存结论到压力面板">💾 保存结论</button>
           <button class="btn-icon" @click="clearAIChat" title="清空对话">🗑️</button>
-          <button class="btn-icon" @click="showAIChat = false">×</button>
+          <button class="btn-icon" @click="closeAIChat">×</button>
         </div>
       </div>
       <div class="ai-chat-messages" ref="aiChatMessages">
