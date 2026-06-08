@@ -1618,13 +1618,18 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
 
     // 目标路径管理
     async function addGoalPath(goalId) {
-      const path = prompt('输入文件夹路径:');
-      if (!path || !path.trim()) return;
-      const goal = goals.value.find(g => g.id === goalId);
-      if (!goal) return;
-      const paths = [...(goal.paths || []), path.trim()];
-      await api(`/api/goals/${goalId}`, { method: 'PUT', body: { paths } });
-      await loadGoals();
+      try {
+        const result = await api('/api/pick-folder', { method: 'POST' });
+        if (result && result.path) {
+          const goal = goals.value.find(g => g.id === goalId);
+          if (!goal) return;
+          const paths = [...(goal.paths || []), result.path];
+          await api(`/api/goals/${goalId}`, { method: 'PUT', body: { paths } });
+          await loadGoals();
+        }
+      } catch (e) {
+        console.error('addGoalPath error:', e);
+      }
     }
 
     async function removeGoalPath(goalId, index) {
