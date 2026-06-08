@@ -11,6 +11,10 @@ let db = null;
 
 function now() { return new Date().toISOString(); }
 
+function safeJsonParse(str, fallback) {
+  try { return JSON.parse(str); } catch (e) { return fallback; }
+}
+
 // ==================== 初始化 ====================
 
 async function init() {
@@ -415,7 +419,7 @@ function getGoals() {
   return queryAll('SELECT * FROM goals WHERE archived = 0').map(g => ({
     ...g,
     archived: !!g.archived,
-    paths: JSON.parse(g.paths || '[]'),
+    paths: safeJsonParse(g.paths, []),
     active_count: queryOne('SELECT COUNT(*) as c FROM tasks WHERE goal_id = ? AND status != "done"', [g.id])?.c || 0,
     total_count: queryOne('SELECT COUNT(*) as c FROM tasks WHERE goal_id = ?', [g.id])?.c || 0,
     done_count: queryOne('SELECT COUNT(*) as c FROM tasks WHERE goal_id = ? AND status = "done"', [g.id])?.c || 0,
@@ -525,7 +529,7 @@ function enrichTask(t) {
   return {
     ...t,
     is_today: !!t.is_today,
-    paths: JSON.parse(t.paths || '[]'),
+    paths: safeJsonParse(t.paths, []),
     goal_name: g ? g.name : null,
     goal_color: g ? g.color : null,
     routine_name: r ? r.name : null,
@@ -712,7 +716,7 @@ function getGoalStats() {
       COALESCE(SUM(actual_time), 0) as total_time,
       COALESCE(SUM(estimated_time), 0) as total_estimated
     FROM tasks WHERE goal_id = ?`, [g.id]);
-    return { id: g.id, name: g.name, description: g.description, color: g.color, paths: JSON.parse(g.paths || '[]'), target_date: g.target_date || null, ...stats };
+    return { id: g.id, name: g.name, description: g.description, color: g.color, paths: safeJsonParse(g.paths, []), target_date: g.target_date || null, ...stats };
   });
 }
 

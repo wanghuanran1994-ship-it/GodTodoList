@@ -3,4 +3,5 @@ node_modules/
 data/db.json
 data/godtodo.migrated
 data/uploads/
+data/ai-config.json
 .DS_Store

@@ -258,6 +258,9 @@ createApp({
     // AI 多模型配置
     const aiConfigs = ref([]);
     const activeAIConfig = ref(0);
+    const aiConfigSaved = ref(false);
+    const showAIConfigJson = ref(false);
+    const aiConfigsJson = computed(() => JSON.stringify({ activeConfig: activeAIConfig.value, configs: aiConfigs.value }, null, 2));
 
     // 导入
     const importDir = ref('');
@@ -348,7 +351,7 @@ createApp({
       currentView.value = view;
       if (view !== 'kanban') closeDetail();
       if (view === 'goals') loadGoalStats();
-      if (view === 'stats') { loadTimeStats(); loadReview(); loadReports(); }
+      if (view === 'dashboard') { loadReview(); loadReports(); }
       if (view === 'notes') loadNoteCards();
       if (view === 'reports') loadReportMeetings();
       expandedProgress.value = {};
@@ -753,13 +756,14 @@ createApp({
           const chunk = decoder.decode(value, { stream: true });
           const lines = chunk.split('\n');
           for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const data = line.slice(6).trim();
+            const tl = line.trim();
+            if (!tl.startsWith('data:')) continue;
+            const data = tl.substring(tl.indexOf(':') + 1).trim();
             if (data === '[DONE]') continue;
             try {
               const json = JSON.parse(data);
-              const delta = json.choices?.[0]?.delta?.content || '';
-              fullContent += delta;
+              const d = json.choices?.[0]?.delta;
+              fullContent += (d?.reasoning_content || '') + (d?.content || '');
             } catch (e) {}
           }
           aiReportContent.value = fullContent;
@@ -856,9 +860,14 @@ createApp({
 
     async function selectTask(id) {
       selectedTaskId.value = id;
-      selectedTask.value = await api(`/api/tasks/${id}`);
-      loadTaskConversations(id);
-      checkAllPathReadmes();
+      try {
+        selectedTask.value = await api(`/api/tasks/${id}`);
+        loadTaskConversations(id);
+        checkAllPathReadmes();
+      } catch (e) {
+        selectedTaskId.value = null;
+        selectedTask.value = null;
+      }
     }
 
     function closeDetail() {
@@ -1189,6 +1198,88 @@ createApp({
         .slice(0, 10);
     });
 
+    const pressureTasks = computed(() => {
+      const today = new Date().toISOString().slice(0, 10);
+      const threeDaysLater = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+      return tasks.value
+        .filter(t => {
+          if (t.status === 'done' || t.status === 'shelved') return false;
+          if (!t.due_date) return false;
+          return t.due_date <= threeDaysLater;
+        })
+        .sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''));
+    });
+
+    const pressureAnalysis = ref('');
+    const analyzingPressure = ref(false);
+
+    async function analyzePressure() {
+      analyzingPressure.value = true;
+      pressureAnalysis.value = '';
+      try {
+        const active = tasks.value.filter(t => t.status === 'in-progress' || t.status === 'todo');
+        const overdue = tasks.value.filter(t => t.due_date && isOverdue(t.due_date) && t.status !== 'done' && t.status !== 'shelved');
+        const shelved = tasks.value.filter(t => t.status === 'shelved');
+        const prompt = `你是一位资深技术管理顾问。请根据以下工作数据，帮我分析当前压力来源，并指出破局关键。
+
+## 我的目标
+${goals.value.map(g => `- ${g.name}${g.description ? '：' + g.description : ''}`).join('\n') || '无'}
+
+## 活跃任务（进行中+待办）
+${active.map(t => `- ${t.title} [${t.status === 'in-progress' ? '进行中' : '待办'}]${t.due_date ? ' 截止:' + t.due_date : ''}${t.estimated_time ? ' 预估:' + t.estimated_time + 'min' : ''}${t.goal_name ? ' 目标:' + t.goal_name : ''}`).join('\n') || '无'}
+
+## 已逾期
+${overdue.map(t => `- ${t.title} 截止:${t.due_date}`).join('\n') || '无'}
+
+## 搁置
+${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
+
+请从以下角度分析（简洁，每条不要太长）：
+1. **核心压力来源**：哪些任务/目标组合造成了最大的认知负荷和时间压力？
+2. **隐藏风险**：是否有被忽视但可能爆发的问题？
+3. **破局关键**：哪个点一旦突破，其他问题会连锁缓解？给出具体可操作的建议。
+4. **优先级重排建议**：当前任务应该如何重新排序？
+
+请用中文回答，Markdown 格式（用标题和列表），控制在 300 字以内。`;
+
+        const configs = aiConfigs.value;
+        const idx = activeAIConfig.value || 0;
+        const cfg = configs[idx];
+        if (!cfg || !cfg.base_url) throw new Error('请先配置 AI 模型');
+
+        const res = await fetch('/api/ai/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: [{ role: 'user', content: prompt }] }),
+        });
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let full = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+          for (const line of lines) {
+            const tl = line.trim();
+            if (!tl.startsWith('data:')) continue;
+            const data = tl.substring(tl.indexOf(':') + 1).trim();
+            if (data === '[DONE]') continue;
+            try {
+              const json = JSON.parse(data);
+              const d = json.choices?.[0]?.delta;
+              full += (d?.reasoning_content || '') + (d?.content || '');
+            } catch (e) {}
+          }
+          pressureAnalysis.value = full;
+        }
+      } catch (e) {
+        pressureAnalysis.value = '分析失败: ' + e.message;
+      }
+      analyzingPressure.value = false;
+    }
+
     async function loadGoalStats() {
       goalStats.value = await api('/api/stats/goals');
     }
@@ -1332,7 +1423,6 @@ createApp({
       cfg.base_url = t.base_url;
       cfg.model = t.model;
       if (!cfg.api_key) cfg.name = t.name;
-      saveAIConfigs();
     }
 
     function addAIConfig() {
@@ -1360,10 +1450,11 @@ createApp({
         method: 'PUT',
         body: { ai_configs: aiConfigs.value, ai_active_config: activeAIConfig.value }
       });
+      aiConfigSaved.value = true;
+      setTimeout(() => { aiConfigSaved.value = false; }, 2000);
     }
 
     async function testAIConnection() {
-      // 先保存当前配置，再测试
       await saveAIConfigs();
       aiTestResult.value = '测试中...';
       try {
@@ -1378,23 +1469,60 @@ createApp({
           aiTestResult.value = '❌ ' + errMsg;
           return;
         }
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let gotContent = false;
-        const timeout = setTimeout(() => { reader.cancel(); if (!gotContent) aiTestResult.value = '⚠️ 连接成功但未收到内容'; }, 10000);
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const text = decoder.decode(value, { stream: true });
-          if (text.includes('"content"') || text.includes('"delta"') || text.includes('text_delta')) {
-            gotContent = true;
-            aiTestResult.value = '✅ 连接成功，模型正常响应';
-            clearTimeout(timeout);
-            reader.cancel();
-            return;
+
+        const ct = res.headers.get('Content-Type') || '';
+        if (ct.includes('text/event-stream')) {
+          // SSE 流式响应 — 解析 SSE 事件
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let gotContent = false;
+          const timeout = setTimeout(() => { reader.cancel(); if (!gotContent) aiTestResult.value = '⚠️ 连接成功但未收到内容（超时）'; }, 15000);
+
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+
+              const events = buffer.split('\n\n');
+              buffer = events.pop();
+
+              for (const event of events) {
+                for (const line of event.split('\n')) {
+                  const tl = line.trim();
+                  if (!tl.startsWith('data:')) continue;
+                  const raw = tl.substring(tl.indexOf(':') + 1).trim();
+                  if (!raw || raw === '[DONE]') continue;
+                  try {
+                    const d = JSON.parse(raw);
+                    const c = d.choices?.[0]?.delta?.content
+                           || d.choices?.[0]?.delta?.reasoning_content
+                           || d.choices?.[0]?.message?.content
+                           || d.content || d.text || d.delta?.text;
+                    if (c) gotContent = true;
+                  } catch (e) { /* skip */ }
+                }
+              }
+              if (gotContent) {
+                aiTestResult.value = '✅ 连接成功，模型正常响应';
+                clearTimeout(timeout);
+                reader.cancel();
+                return;
+              }
+            }
+          } catch (e) { /* reader cancelled */ }
+          if (!gotContent) aiTestResult.value = '⚠️ 连接成功但未收到内容';
+        } else {
+          // 非流式响应 — 直接解析 JSON
+          try {
+            const data = await res.json();
+            const c = data.choices?.[0]?.message?.content || data.content || data.text || '';
+            aiTestResult.value = c ? '✅ 连接成功，模型正常响应' : '⚠️ 连接成功但响应为空';
+          } catch (e) {
+            aiTestResult.value = '⚠️ 连接成功但响应格式异常';
           }
         }
-        if (!gotContent) aiTestResult.value = '⚠️ 连接成功但无内容';
       } catch (e) {
         aiTestResult.value = e.message.includes('Failed to fetch')
           ? '❌ 服务未启动'
@@ -1415,12 +1543,17 @@ createApp({
 
     function isOverdue(dateStr) {
       if (!dateStr) return false;
-      return new Date(dateStr) < new Date(new Date().toDateString());
+      const [y, m, d] = dateStr.split('-').map(Number);
+      const dueDate = new Date(y, m - 1, d);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return dueDate < today;
     }
 
     function formatDate(dateStr) {
       if (!dateStr) return '';
       const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return dateStr;
       return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     }
 
@@ -1655,12 +1788,14 @@ createApp({
           // 解析 SSE 数据
           const lines = chunk.split('\n');
           for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6).trim();
+            const tl = line.trim();
+            if (tl.startsWith('data:')) {
+              const data = tl.substring(tl.indexOf(':') + 1).trim();
               if (data === '[DONE]') continue;
               try {
                 const json = JSON.parse(data);
-                const delta = json.choices?.[0]?.delta?.content;
+                const d = json.choices?.[0]?.delta;
+                const delta = (d?.reasoning_content || '') + (d?.content || '');
                 if (delta) {
                   fullContent += delta;
                   aiStreamContent.value = fullContent;
@@ -1705,11 +1840,21 @@ createApp({
       try {
         // marked 可能暴露为 window.marked 或 window.marked.marked (取决于版本/打包方式)
         const md = window.marked?.marked || window.marked;
+        let html = '';
         if (md && typeof md === 'function') {
-          return md.parse ? md.parse(text) : md(text);
+          html = md.parse ? md.parse(text) : md(text);
+        } else if (md && typeof md.parse === 'function') {
+          html = md.parse(text);
         }
-        if (md && typeof md.parse === 'function') {
-          return md.parse(text);
+        if (html) {
+          // 使用 DOMPurify 防止 XSS（AI 生成内容不可信）
+          if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
+            return window.DOMPurify.sanitize(html, {
+              ALLOWED_TAGS: ['h1','h2','h3','h4','h5','h6','p','br','strong','em','b','i','u','s','a','ul','ol','li','code','pre','blockquote','table','thead','tbody','tr','th','td','hr','img','span','div','del','input'],
+              ALLOWED_ATTR: ['href','src','alt','title','class','checked','type','disabled']
+            });
+          }
+          return html;
         }
       } catch (e) {}
       // fallback: 基本 HTML 转义 + 换行
@@ -2053,7 +2198,7 @@ createApp({
       saveRoutine, editRoutine, archiveRoutine, createTaskFromRoutine,
       loadTimeStats, loadReview, barHeight,
       saveSettings,
-      aiConfigs, activeAIConfig, addAIConfig, removeAIConfig, switchAIModel, saveAIConfigs,
+      aiConfigs, activeAIConfig, addAIConfig, removeAIConfig, switchAIModel, saveAIConfigs, aiConfigSaved, showAIConfigJson, aiConfigsJson,
       applyPresetToConfig, testAIConnection, aiTestResult,
       statusLabel, freqLabel, isOverdue, formatDate, formatChartDate,
       fileIcon, formatSize,
@@ -2089,7 +2234,7 @@ createApp({
       // Kanban drag
       onKanbanDragStart, onKanbanDragOver, onKanbanDragLeave, onKanbanDrop,
       // Dashboard
-      upcomingDeadlines, recentCompleted,
+      upcomingDeadlines, recentCompleted, pressureTasks, pressureAnalysis, analyzingPressure, analyzePressure,
       // Reports
       filterReportOnly, reportMeetings, loadReportMeetings, groupedReportTasks,
       // Conversations

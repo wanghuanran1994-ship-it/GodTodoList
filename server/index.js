@@ -45,11 +45,26 @@ function asyncHandler(fn) {
   };
 }
 
-// 设置键白名单
+// AI 配置 JSON 文件路径
+const AI_CONFIG_FILE = path.join(__dirname, '..', 'data', 'ai-config.json');
+
+function readAIConfig() {
+  try {
+    if (fs.existsSync(AI_CONFIG_FILE)) {
+      return JSON.parse(fs.readFileSync(AI_CONFIG_FILE, 'utf-8'));
+    }
+  } catch (e) { console.error('读取 AI 配置失败:', e.message); }
+  return { activeConfig: 0, configs: [] };
+}
+
+function writeAIConfig(data) {
+  fs.writeFileSync(AI_CONFIG_FILE, JSON.stringify(data, null, 2), 'utf-8');
+}
+
+// 设置键白名单（ai_configs/ai_active_config 存储在 data/ai-config.json，不经过 DB）
 const ALLOWED_SETTINGS = [
   'root_dir', 'folder_format', 'auto_create_folder',
   'terminal_path', 'editor',
-  'ai_configs', 'ai_active_config',
 ];
 
 // 中间件
@@ -73,11 +88,25 @@ const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
 
 // ==================== Settings ====================
 
-app.get('/api/settings', (req, res) => res.json(db.getAllSettings()));
+app.get('/api/settings', (req, res) => {
+  const settings = db.getAllSettings();
+  const aiCfg = readAIConfig();
+  settings.ai_configs = aiCfg.configs;
+  settings.ai_active_config = aiCfg.activeConfig;
+  res.json(settings);
+});
 
 app.put('/api/settings', (req, res) => {
+  // AI 配置写入 JSON 文件
+  if (req.body.ai_configs !== undefined || req.body.ai_active_config !== undefined) {
+    const aiCfg = readAIConfig();
+    if (req.body.ai_configs !== undefined) aiCfg.configs = req.body.ai_configs;
+    if (req.body.ai_active_config !== undefined) aiCfg.activeConfig = req.body.ai_active_config;
+    writeAIConfig(aiCfg);
+  }
+  // 其他设置写入数据库
   for (const [key, value] of Object.entries(req.body)) {
-    if (ALLOWED_SETTINGS.includes(key)) {
+    if (key !== 'ai_configs' && ALLOWED_SETTINGS.includes(key)) {
       db.setSetting(key, value);
     }
   }
@@ -582,9 +611,8 @@ app.get('/api/tasks/today', (req, res) => {
 app.post('/api/ai/decompose', (req, res) => {
   const { title, description, context } = req.body;
 
-  const configs = db.getSetting('ai_configs');
-  const activeIdx = parseInt(db.getSetting('ai_active_config')) || 0;
-  const cfg = Array.isArray(configs) && configs[activeIdx] ? configs[activeIdx] : null;
+  const aiCfg = readAIConfig();
+  const cfg = aiCfg.configs[aiCfg.activeConfig] || null;
 
   if (!cfg || !cfg.base_url || !cfg.model) {
     return res.status(400).json({ error: '请先配置 AI 模型' });
@@ -597,24 +625,25 @@ app.post('/api/ai/decompose', (req, res) => {
 
 请直接输出子阶段列表，每行一个，不要编号，不要其他内容。`;
 
-  const isHttps = cfg.base_url.startsWith('https');
+  const isHttps = cfg.base_url.toLowerCase().startsWith('https');
   const requester = isHttps ? https : http;
 
+  const baseEndpoint = cfg.base_url.replace(/\/+$/, '');
   let postData, options;
   if (cfg.provider === 'anthropic') {
-    const fullUrl = cfg.base_url.replace(/\/+$/, '') + '/v1/messages';
+    const fullUrl = baseEndpoint.endsWith('/v1') ? baseEndpoint + '/messages' : baseEndpoint + '/v1/messages';
     const url = new URL(fullUrl);
     postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: 1024 });
     options = {
-      hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST',
+      hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'x-api-key': cfg.api_key, 'anthropic-version': '2023-06-01' },
     };
   } else {
-    const fullUrl = cfg.base_url.replace(/\/+$/, '') + '/v1/chat/completions';
+    const fullUrl = baseEndpoint.endsWith('/v1') ? baseEndpoint + '/chat/completions' : baseEndpoint + '/v1/chat/completions';
     const url = new URL(fullUrl);
     postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }] });
     options = {
-      hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST',
+      hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'Authorization': `Bearer ${cfg.api_key}` },
     };
   }
@@ -626,15 +655,13 @@ app.post('/api/ai/decompose', (req, res) => {
       try {
         let text = '';
         if (cfg.provider === 'anthropic') {
-          // Anthropic 非流式响应
           const json = JSON.parse(body);
           text = json.content?.[0]?.text || '';
         } else {
-          // OpenAI 非流式
           const json = JSON.parse(body);
           text = json.choices?.[0]?.message?.content || '';
         }
-        const subtasks = text.split('\n').map(s => s.replace(/^[\d\.\-\*]+\s*/, '').trim()).filter(s => s.length > 1);
+        const subtasks = text.split('\n').map(s => s.replace(/^[\d.\-*]+\s*/, '').trim()).filter(s => s.length > 1);
         res.json({ subtasks });
       } catch (e) {
         res.status(502).json({ error: 'AI 解析失败' });
@@ -650,9 +677,8 @@ app.post('/api/ai/enrich', (req, res) => {
   const { title } = req.body;
   if (!title) return res.json({});
 
-  const configs = db.getSetting('ai_configs');
-  const activeIdx = parseInt(db.getSetting('ai_active_config')) || 0;
-  const cfg = Array.isArray(configs) && configs[activeIdx] ? configs[activeIdx] : null;
+  const aiCfg = readAIConfig();
+  const cfg = aiCfg.configs[aiCfg.activeConfig] || null;
   if (!cfg || !cfg.base_url || !cfg.model) return res.json({});
 
   const allGoals = db.getGoals();
@@ -696,24 +722,25 @@ ${existingDirs}
   "reuse_folder": "如果已有目录完全匹配此任务，填目录名（从已有目录列表中选）；否则留空"
 }`;
 
-  const isHttps = cfg.base_url.startsWith('https');
+  const isHttps = cfg.base_url.toLowerCase().startsWith('https');
   const requester = isHttps ? https : http;
 
+  const baseEndpoint2 = cfg.base_url.replace(/\/+$/, '');
   let postData, options;
   if (cfg.provider === 'anthropic') {
-    const fullUrl = cfg.base_url.replace(/\/+$/, '') + '/v1/messages';
+    const fullUrl = baseEndpoint2.endsWith('/v1') ? baseEndpoint2 + '/messages' : baseEndpoint2 + '/v1/messages';
     const url = new URL(fullUrl);
     postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: 1024 });
     options = {
-      hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST',
+      hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'x-api-key': cfg.api_key, 'anthropic-version': '2023-06-01' },
     };
   } else {
-    const fullUrl = cfg.base_url.replace(/\/+$/, '') + '/v1/chat/completions';
+    const fullUrl = baseEndpoint2.endsWith('/v1') ? baseEndpoint2 + '/chat/completions' : baseEndpoint2 + '/v1/chat/completions';
     const url = new URL(fullUrl);
     postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }] });
     options = {
-      hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST',
+      hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'Authorization': `Bearer ${cfg.api_key}` },
     };
   }
@@ -732,7 +759,8 @@ ${existingDirs}
           text = json.choices?.[0]?.message?.content || '';
         }
         // Extract JSON from response (may have markdown wrapping)
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        let cleanText = text.replace(/```(?:json)?\s*([\s\S]*?)```/g, '$1').trim();
+        const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
         if (!jsonMatch) return res.json({});
         const parsed = JSON.parse(jsonMatch[0]);
 
@@ -785,6 +813,11 @@ app.get('/api/backup', (req, res) => {
 app.post('/api/restore', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: '请选择备份文件' });
   const dbPath = path.join(__dirname, '..', 'data', 'godtodo.db');
+  // 先备份当前数据库
+  if (fs.existsSync(dbPath)) {
+    const backupPath = dbPath + '.backup-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    try { fs.copyFileSync(dbPath, backupPath); } catch (e) { console.error('备份当前数据库失败:', e.message); }
+  }
   fs.copyFileSync(req.file.path, dbPath);
   try { fs.unlinkSync(req.file.path); } catch (e) {}
   res.json({ success: true, message: '数据库已恢复，请重启服务' });
@@ -846,11 +879,12 @@ const https = require('https');
 
 // OpenAI 兼容协议 (DeepSeek, GLM, 通义千问, Ollama 等)
 function proxyOpenAI(baseUrl, model, apiKey, xToken, allMessages, res) {
-  const isHttps = baseUrl.startsWith('https');
+  const isHttps = baseUrl.toLowerCase().startsWith('https');
   const requester = isHttps ? https : http;
 
-  // 拼接完整 URL，保留 baseUrl 中的路径部分
-  const fullUrl = baseUrl.replace(/\/+$/, '') + '/v1/chat/completions';
+  // 拼接完整 URL，智能处理 baseUrl 中已有的 /v1 路径
+  const base = baseUrl.replace(/\/+$/, '');
+  const fullUrl = base.endsWith('/v1') ? base + '/chat/completions' : base + '/v1/chat/completions';
   const url = new URL(fullUrl);
 
   const postData = JSON.stringify({ model, messages: allMessages, stream: true });
@@ -860,6 +894,7 @@ function proxyOpenAI(baseUrl, model, apiKey, xToken, allMessages, res) {
     port: url.port || (isHttps ? 443 : 80),
     path: url.pathname,
     method: 'POST',
+    timeout: 300000,
     headers: {
       'Content-Type': 'application/json',
       'Content-Length': Buffer.byteLength(postData),
@@ -869,6 +904,20 @@ function proxyOpenAI(baseUrl, model, apiKey, xToken, allMessages, res) {
   if (xToken) options.headers['X-Token'] = xToken;
 
   const proxyReq = requester.request(options, (proxyRes) => {
+    // 非 2xx 状态码：收集错误信息直接返回 JSON
+    if (proxyRes.statusCode >= 400) {
+      let body = '';
+      proxyRes.on('data', chunk => { body += chunk.toString(); });
+      proxyRes.on('end', () => {
+        let errMsg = `AI 服务返回 ${proxyRes.statusCode}`;
+        try {
+          const parsed = JSON.parse(body);
+          errMsg = parsed.error?.message || parsed.message || parsed.error || errMsg;
+        } catch (e) {}
+        res.status(502).json({ error: errMsg });
+      });
+      return;
+    }
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -884,12 +933,12 @@ function proxyOpenAI(baseUrl, model, apiKey, xToken, allMessages, res) {
 
 // Anthropic Claude 协议
 function proxyAnthropic(baseUrl, model, apiKey, allMessages, res) {
-  const isHttps = baseUrl.startsWith('https');
+  const isHttps = baseUrl.toLowerCase().startsWith('https');
   const requester = isHttps ? https : http;
 
-  // baseUrl 已经包含完整路径前缀 (如 https://open.bigmodel.cn/api/anthropic)
-  // 追加 /v1/messages
-  const fullUrl = baseUrl.replace(/\/+$/, '') + '/v1/messages';
+  // 智能处理 baseUrl 中已有的 /v1 路径
+  const base = baseUrl.replace(/\/+$/, '');
+  const fullUrl = base.endsWith('/v1') ? base + '/messages' : base + '/v1/messages';
   const url = new URL(fullUrl);
 
   // Anthropic 使用 system 字段而非 system message
@@ -909,6 +958,7 @@ function proxyAnthropic(baseUrl, model, apiKey, allMessages, res) {
     port: url.port || (isHttps ? 443 : 80),
     path: url.pathname,
     method: 'POST',
+    timeout: 300000,
     headers: {
       'Content-Type': 'application/json',
       'Content-Length': Buffer.byteLength(postData),
@@ -918,6 +968,20 @@ function proxyAnthropic(baseUrl, model, apiKey, allMessages, res) {
   };
 
   const proxyReq = requester.request(options, (proxyRes) => {
+    // 非 2xx 状态码：收集错误信息直接返回 JSON
+    if (proxyRes.statusCode >= 400) {
+      let body = '';
+      proxyRes.on('data', chunk => { body += chunk.toString(); });
+      proxyRes.on('end', () => {
+        let errMsg = `AI 服务返回 ${proxyRes.statusCode}`;
+        try {
+          const parsed = JSON.parse(body);
+          errMsg = parsed.error?.message || parsed.message || parsed.error || errMsg;
+        } catch (e) {}
+        res.status(502).json({ error: errMsg });
+      });
+      return;
+    }
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -930,8 +994,9 @@ function proxyAnthropic(baseUrl, model, apiKey, allMessages, res) {
       buffer = lines.pop(); // 保留未完成的行
 
       for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const raw = line.slice(6).trim();
+        const tl = line.trim();
+        if (!tl.startsWith('data:')) continue;
+        const raw = tl.substring(tl.indexOf(':') + 1).trim();
         if (!raw || raw === '[DONE]') continue;
         try {
           const evt = JSON.parse(raw);
@@ -945,7 +1010,24 @@ function proxyAnthropic(baseUrl, model, apiKey, allMessages, res) {
         } catch (e) { /* skip */ }
       }
     });
-    proxyRes.on('end', () => res.end());
+    proxyRes.on('end', () => {
+      // 处理 buffer 中剩余的数据
+      if (buffer.trim()) {
+        const tl = buffer.trim();
+        if (tl.startsWith('data:')) {
+          const raw = tl.substring(tl.indexOf(':') + 1).trim();
+          if (raw && raw !== '[DONE]') {
+            try {
+              const evt = JSON.parse(raw);
+              if (evt.type === 'message_stop') {
+                res.write('data: [DONE]\n\n');
+              }
+            } catch (e) {}
+          }
+        }
+      }
+      res.end();
+    });
   });
   proxyReq.on('error', (err) => {
     console.error('AI Proxy Error:', err);
@@ -1050,9 +1132,8 @@ app.post('/api/tasks/:id/analyze-progress', asyncHandler(async (req, res) => {
 ${allContent}`;
 
   // 获取 AI 配置
-  const configs = db.getSetting('ai_configs');
-  const activeIdx = parseInt(db.getSetting('ai_active_config')) || 0;
-  const cfg = Array.isArray(configs) && configs[activeIdx] ? configs[activeIdx] : null;
+  const aiCfg = readAIConfig();
+  const cfg = aiCfg.configs[aiCfg.activeConfig] || null;
   if (!cfg || !cfg.base_url || !cfg.model) {
     return res.json({ progress: '请先配置 AI 模型' });
   }
@@ -1075,17 +1156,18 @@ ${allContent}`;
 function aiChatSync(cfg, messages) {
   return new Promise((resolve, reject) => {
     const provider = cfg.provider || 'openai';
-    const isHttps = cfg.base_url.startsWith('https');
+    const isHttps = cfg.base_url.toLowerCase().startsWith('https');
     const requester = isHttps ? https : http;
 
     let fullUrl, postData;
+    const base = cfg.base_url.replace(/\/+$/, '');
     if (provider === 'anthropic') {
-      fullUrl = cfg.base_url.replace(/\/+$/, '') + '/v1/messages';
+      fullUrl = base.endsWith('/v1') ? base + '/messages' : base + '/v1/messages';
       const systemContent = messages.find(m => m.role === 'system')?.content || '';
       const chatMessages = messages.filter(m => m.role !== 'system');
       postData = JSON.stringify({ model: cfg.model, system: systemContent, messages: chatMessages, max_tokens: 512, stream: false });
     } else {
-      fullUrl = cfg.base_url.replace(/\/+$/, '') + '/v1/chat/completions';
+      fullUrl = base.endsWith('/v1') ? base + '/chat/completions' : base + '/v1/chat/completions';
       postData = JSON.stringify({ model: cfg.model, messages, max_tokens: 512, stream: false });
     }
 
@@ -1098,7 +1180,7 @@ function aiChatSync(cfg, messages) {
       if (cfg.x_token) headers['X-Token'] = cfg.x_token;
     }
 
-    const proxyReq = requester.request({ hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', headers }, (proxyRes) => {
+    const proxyReq = requester.request({ hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000, headers }, (proxyRes) => {
       let body = '';
       proxyRes.on('data', chunk => body += chunk);
       proxyRes.on('end', () => {
@@ -1240,11 +1322,13 @@ app.post('/api/conversations/:id/continue', asyncHandler(async (req, res) => {
   const dir = conv.directory || '';
   const cwd = fs.existsSync(dir) ? dir : fm.getRootDir();
 
+  const safeCwd = cwd.replace(/'/g, "'\\''");
+  const safeSessionId = (conv.session_id || '').replace(/'/g, "'\\''");
   let runCmd;
   if (conv.tool === 'opencode') {
-    runCmd = `cd '${cwd.replace(/'/g, "'\\''")}' && opencode --session '${conv.session_id}'`;
+    runCmd = `cd '${safeCwd}' && opencode --session '${safeSessionId}'`;
   } else {
-    runCmd = `cd '${cwd.replace(/'/g, "'\\''")}' && claude --resume '${conv.session_id}'`;
+    runCmd = `cd '${safeCwd}' && claude --resume '${safeSessionId}'`;
   }
 
   const platform = process.platform;
@@ -1266,9 +1350,8 @@ app.post('/api/ai/chat', (req, res) => {
   const { messages } = req.body;
 
   // 从 ai_configs 中获取当前激活的配置
-  const configs = db.getSetting('ai_configs');
-  const activeIdx = parseInt(db.getSetting('ai_active_config')) || 0;
-  const cfg = Array.isArray(configs) && configs[activeIdx] ? configs[activeIdx] : null;
+  const aiCfg = readAIConfig();
+  const cfg = aiCfg.configs[aiCfg.activeConfig] || null;
 
   if (!cfg || !cfg.base_url || !cfg.model) {
     return res.status(400).json({ error: '请先在设置中配置 AI 模型（添加配置并填入 API Key）' });
@@ -1352,6 +1435,15 @@ app.get('*', (req, res) => {
 
 (async () => {
   await db.init();
+
+  // 首次启动：从 SQLite 迁移 AI 配置到 JSON 文件
+  if (!fs.existsSync(AI_CONFIG_FILE)) {
+    const configs = db.getSetting('ai_configs') || [];
+    const activeConfig = parseInt(db.getSetting('ai_active_config')) || 0;
+    writeAIConfig({ activeConfig, configs });
+    console.log('  📝 AI 配置已迁移到 data/ai-config.json');
+  }
+
   dbReady = true;
 
   app.listen(PORT, '127.0.0.1', () => {

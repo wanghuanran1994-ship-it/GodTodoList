@@ -41,10 +41,6 @@
           <span class="nav-icon">📅</span>
           <span class="nav-label" v-show="!sidebarCollapsed">日历</span>
         </div>
-        <div class="nav-item" :class="{ active: currentView === 'stats' }" @click="switchView('stats')">
-          <span class="nav-icon">📊</span>
-          <span class="nav-label" v-show="!sidebarCollapsed">统计</span>
-        </div>
         <div class="nav-item" :class="{ active: currentView === 'reports' }" @click="switchView('reports')">
           <span class="nav-icon">🎤</span>
           <span class="nav-label" v-show="!sidebarCollapsed">汇报</span>
@@ -117,8 +113,8 @@
             </div>
           </div>
 
+          <!-- 三栏任务区 -->
           <div class="dash-grid">
-            <!-- 今日任务 -->
             <div class="dash-panel">
               <div class="dash-panel-header">
                 <h3>☀️ 今日任务</h3>
@@ -133,10 +129,9 @@
                   <span class="dash-task-goal" v-if="task.goal_name" :style="{ color: task.goal_color }">{{ task.goal_name }}</span>
                 </div>
               </div>
-              <div class="dash-empty" v-else>暂无今日任务，在任务卡片上点击 🔥 标记</div>
+              <div class="dash-empty" v-else>暂无今日任务</div>
             </div>
 
-            <!-- 即将到期 -->
             <div class="dash-panel">
               <div class="dash-panel-header">
                 <h3>⏰ 即将到期</h3>
@@ -149,24 +144,75 @@
                   <span class="dash-task-due" :class="{ overdue: isOverdue(task.due_date) }">{{ task.due_date }}</span>
                 </div>
               </div>
-              <div class="dash-empty" v-else>无即将到期的任务</div>
+              <div class="dash-empty" v-else>无即将到期任务</div>
+            </div>
+
+            <div class="dash-panel">
+              <div class="dash-panel-header">
+                <h3>🔥 压力来源</h3>
+                <button class="btn btn-xs btn-primary" @click="analyzePressure" :disabled="analyzingPressure">
+                  {{ analyzingPressure ? '分析中...' : '🤖 AI 分析' }}
+                </button>
+              </div>
+              <div class="dash-task-list" v-if="pressureAnalysis">
+                <div class="pressure-analysis-content" v-html="renderMarkdown(pressureAnalysis)"></div>
+              </div>
+              <div class="dash-empty" v-else>点击「AI 分析」让军师帮你梳理压力来源和破局关键</div>
             </div>
           </div>
 
-          <!-- 最近完成 -->
-          <div class="dash-panel" style="margin-top:0">
+          <!-- 报告区 -->
+          <div class="dash-panel dash-report-panel">
             <div class="dash-panel-header">
-              <h3>✅ 最近完成</h3>
-            </div>
-            <div class="dash-task-list" v-if="recentCompleted.length">
-              <div class="dash-task-item done" v-for="task in recentCompleted.slice(0, 6)" :key="task.id"
-                   @click="goToTask(task.id)">
-                <span class="task-status-dot done"></span>
-                <span class="dash-task-title done">{{ task.title }}</span>
-                <span class="dash-task-date">{{ task.completed_at?.slice(0, 10) || '' }}</span>
+              <h3>
+                📊 {{ reviewType === 'daily' ? '日报' : '周报' }}
+              </h3>
+              <div class="dash-report-header-actions">
+                <button class="btn btn-xs" :class="{ 'btn-primary': reviewType === 'daily' }" @click="reviewType = 'daily'; loadReview(); loadReports()">日报</button>
+                <button class="btn btn-xs" :class="{ 'btn-primary': reviewType === 'weekly' }" @click="reviewType = 'weekly'; loadReview(); loadReports()">周报</button>
+                <button class="btn btn-sm btn-primary" @click="generateReport(reviewType)" :disabled="aiGeneratingReport">
+                  {{ aiGeneratingReport ? '生成中...' : '🤖 AI 生成' }}
+                </button>
               </div>
             </div>
-            <div class="dash-empty" v-else>暂无完成记录</div>
+            <div class="dash-report-body">
+              <div class="dash-report-sidebar">
+                <div class="report-history-list">
+                  <div v-for="r in reportHistory" :key="r.id"
+                       @click="selectedReport = r"
+                       class="report-history-item"
+                       :class="{ 'report-active': selectedReport?.id === r.id }">
+                    <div class="report-history-meta">
+                      <span class="report-history-date">{{ formatDate(r.created_at) }}</span>
+                      <button class="btn btn-xs" @click.stop="deleteReport(r.id)" style="opacity:0.3;font-size:10px">×</button>
+                    </div>
+                  </div>
+                  <div v-if="reportHistory.length === 0" class="report-history-empty">
+                    暂无{{ reviewType === 'daily' ? '日报' : '周报' }}
+                  </div>
+                </div>
+              </div>
+              <div class="dash-report-content">
+                <div v-if="selectedReport" class="report-content-card">
+                  <div class="report-content-header">
+                    <span class="report-meta-text">{{ formatDate(selectedReport.created_at) }} {{ selectedReport.type === 'daily' ? '日报' : '周报' }}</span>
+                    <button class="btn btn-xs" @click="copyReportContent(selectedReport.content)">📋 复制</button>
+                  </div>
+                  <div v-html="renderMarkdown(selectedReport.content)" class="report-content"></div>
+                </div>
+                <div v-else-if="aiReportContent" class="report-content-card">
+                  <div class="report-content-header">
+                    <span class="report-meta-text">刚刚生成</span>
+                    <button class="btn btn-xs" @click="copyReportText">📋 复制</button>
+                  </div>
+                  <div v-html="renderMarkdown(aiReportContent)" class="report-content"></div>
+                </div>
+                <div v-else class="report-placeholder">
+                  <div class="report-placeholder-icon">📊</div>
+                  <div class="report-placeholder-text">选择左侧报告查看，或点击「AI 生成」</div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -481,7 +527,7 @@
             </div>
             <p class="routine-desc" v-if="routine.description">{{ routine.description }}</p>
             <div class="routine-goal" v-if="routine.goal_name">
-              <span class="goal-dot" :style="{ background: routine.goal_color || '#3b82f6' }"></span>
+              <span class="goal-dot" :style="{ background: routine.goal_color || 'var(--primary)' }"></span>
               {{ routine.goal_name }}
             </div>
             <div class="routine-actions">
@@ -493,160 +539,60 @@
         </div>
       </div>
 
-      <!-- ========== 统计视图 ========== -->
-      <div class="view stats-view" v-if="currentView === 'stats'">
-        <div class="view-header">
-          <h1 class="view-title">统计</h1>
-        </div>
-
-        <!-- 概览卡片 -->
-        <div class="stats-cards">
-          <div class="stat-card" @click="reviewType='daily';loadReview()">
-            <div class="stat-card-icon">✅</div>
-            <div class="stat-card-info">
-              <span class="stat-card-num">{{ reviewData.completed?.length || 0 }}</span>
-              <span class="stat-card-label">今日完成</span>
-            </div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card-icon">🔄</div>
-            <div class="stat-card-info">
-              <span class="stat-card-num">{{ reviewData.inProgress?.length || 0 }}</span>
-              <span class="stat-card-label">进行中</span>
-            </div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card-icon">⚠️</div>
-            <div class="stat-card-info">
-              <span class="stat-card-num">{{ reviewData.overdue?.length || 0 }}</span>
-              <span class="stat-card-label">已逾期</span>
-            </div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card-icon">⏱️</div>
-            <div class="stat-card-info">
-              <span class="stat-card-num">{{ totalTimeSpent }}</span>
-              <span class="stat-card-label">总投入(分)</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- 报告区：左侧历史列表 + 右侧内容 -->
-        <div style="display:flex;gap:16px">
-          <!-- 左侧：报告列表 -->
-          <div style="width:260px;flex-shrink:0">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-              <h3 style="margin:0">报告</h3>
-              <div style="display:flex;gap:4px">
-                <button class="btn btn-xs" :class="{ 'btn-primary': reviewType === 'daily' }" @click="reviewType = 'daily'; loadReview(); loadReports()">日报</button>
-                <button class="btn btn-xs" :class="{ 'btn-primary': reviewType === 'weekly' }" @click="reviewType = 'weekly'; loadReview(); loadReports()">周报</button>
-              </div>
-            </div>
-            <button class="btn btn-sm btn-primary" style="width:100%;margin-bottom:10px" @click="generateReport(reviewType)" :disabled="aiGeneratingReport">
-              {{ aiGeneratingReport ? '生成中...' : '🤖 AI 生成' + (reviewType === 'daily' ? '日报' : '周报') }}
-            </button>
-            <div class="report-history-list">
-              <div v-for="r in reportHistory" :key="r.id"
-                   @click="selectedReport = r"
-                   class="report-history-item"
-                   :class="{ 'report-active': selectedReport?.id === r.id }">
-                <div class="report-history-meta">
-                  <span>
-                    <span style="font-weight:600" :style="{ color: r.type === 'daily' ? 'var(--primary)' : '#f59e0b' }">{{ r.type === 'daily' ? '📋' : '📆' }}</span>
-                    {{ formatDate(r.created_at) }}
-                  </span>
-                  <button class="btn btn-xs" @click.stop="deleteReport(r.id)" style="opacity:0.3;font-size:10px">×</button>
-                </div>
-              </div>
-              <div v-if="reportHistory.length === 0" class="report-history-empty">
-                暂无{{ reviewType === 'daily' ? '日报' : '周报' }}<br>点击上方按钮生成
-              </div>
-            </div>
-          </div>
-
-          <!-- 右侧：报告内容 -->
-          <div style="flex:1;min-width:0">
-            <div v-if="selectedReport" style="background:var(--bg-2);border-radius:var(--radius);padding:16px 20px;min-height:300px">
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-                <span style="font-size:var(--text-xs);color:var(--text-3)">{{ formatDate(selectedReport.created_at) }} {{ selectedReport.type === 'daily' ? '日报' : '周报' }}</span>
-                <button class="btn btn-xs" @click="copyReportContent(selectedReport.content)">📋 复制</button>
-              </div>
-              <div v-html="renderMarkdown(selectedReport.content)" class="report-content"></div>
-            </div>
-            <div v-else-if="aiReportContent" style="background:var(--bg-2);border-radius:var(--radius);padding:16px 20px;min-height:300px">
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-                <span style="font-size:var(--text-xs);color:var(--text-3)">刚刚生成</span>
-                <button class="btn btn-xs" @click="copyReportText">📋 复制</button>
-              </div>
-              <div v-html="renderMarkdown(aiReportContent)" class="report-content"></div>
-            </div>
-            <div v-else class="report-placeholder">
-              <div>
-                <div class="report-placeholder-icon">📊</div>
-                <div class="report-placeholder-text">选中左侧报告查看，或点击「AI 生成」</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- ========== 笔记视图 ========== -->
       <div class="view notes-view" v-if="currentView === 'notes'">
         <div class="view-header">
           <h1 class="view-title">📔 笔记</h1>
         </div>
 
-        <!-- 快捷捕获栏 -->
-        <div style="display:flex;gap:0;margin-bottom:20px;border:2px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg-0);transition:border-color .2s" :style="newCardText ? { borderColor: 'var(--primary)' } : {}">
-          <div style="display:flex;align-items:center;padding:0 12px;color:var(--text-3);font-size:16px">💡</div>
-          <input type="text" v-model="newCardText" style="flex:1;border:none;background:transparent;font-size:14px;padding:12px 0;outline:none"
-                 placeholder="记录想法、命令、链接... 回车创建卡片"
-                 @keyup.enter="createCard">
-        </div>
+        <div class="notes-content">
+          <!-- 快捷捕获栏 -->
+          <div class="notes-capture" :class="{ focused: newCardText }">
+            <div class="notes-capture-icon">💡</div>
+            <input type="text" v-model="newCardText" class="notes-capture-input"
+                   placeholder="记录想法、命令、链接... 回车创建卡片"
+                   @keyup.enter="createCard">
+          </div>
 
-        <!-- 卡片网格 -->
-        <div v-if="noteCards.length" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px">
-          <div v-for="card in noteCards" :key="card.id" style="background:var(--bg-2);border-radius:10px;border:1px solid var(--border);overflow:hidden">
-
-            <!-- 卡片标题栏 -->
-            <div style="display:flex;align-items:center;gap:6px;padding:10px 12px;background:var(--bg-1);border-bottom:1px solid var(--border)">
-              <input :value="card.title || '未命名'"
-                     @blur="renameCard(card.id, $event.target.value)"
-                     @keyup.enter="$event.target.blur()"
-                     style="flex:1;border:none;background:transparent;font-size:13px;font-weight:600;color:var(--text-1);outline:none;padding:0">
-              <span style="font-size:10px;color:var(--text-3);white-space:nowrap">{{ card.items?.length || 0 }} 条</span>
-              <button class="btn btn-xs" @click="deleteCard(card.id)" style="opacity:0.3;font-size:12px" title="删除卡片">×</button>
-            </div>
-
-            <!-- 卡片条目列表 -->
-            <div style="padding:4px 0">
-              <div v-for="item in card.items" :key="item.id" style="padding:6px 12px;display:flex;align-items:flex-start;gap:6px;border-bottom:1px solid var(--border);font-size:13px">
-                <span style="color:var(--text-3);font-size:11px;margin-top:2px">•</span>
-                <input :value="item.content"
-                       @blur="updateItem(item.id, $event.target.value)"
+          <!-- 卡片网格 -->
+          <div v-if="noteCards.length" class="notes-grid">
+            <div v-for="card in noteCards" :key="card.id" class="note-card">
+              <div class="note-card-header">
+                <input :value="card.title || '未命名'"
+                       @blur="renameCard(card.id, $event.target.value)"
                        @keyup.enter="$event.target.blur()"
-                       style="flex:1;border:none;background:transparent;color:var(--text-1);outline:none;padding:0"
-                       placeholder="空">
-                <button class="btn btn-xs" @click="deleteItem(card.id, item.id)" style="opacity:0;font-size:10px" title="删除">×</button>
+                       class="note-card-title">
+                <span class="note-card-count">{{ card.items?.length || 0 }} 条</span>
+                <button class="note-card-delete" @click="deleteCard(card.id)" title="删除卡片">×</button>
               </div>
-              <div v-if="!card.items || card.items.length === 0" style="padding:10px 12px;font-size:12px;color:var(--text-3)">暂无条目</div>
-            </div>
 
-            <!-- 添加条目 -->
-            <div style="padding:4px 12px 8px;display:flex;gap:6px">
-              <input :id="'new-item-' + card.id" v-model="newItemTexts[card.id]"
-                     @keyup.enter="addItem(card.id); $event.target.focus()"
-                     style="flex:1;border:none;background:transparent;font-size:12px;color:var(--text-2);outline:none"
-                     :placeholder="'+ 添加条目'">
+              <div class="note-items">
+                <div v-for="item in card.items" :key="item.id" class="note-item">
+                  <span class="note-item-bullet">•</span>
+                  <input :value="item.content"
+                         @blur="updateItem(item.id, $event.target.value)"
+                         @keyup.enter="$event.target.blur()"
+                         class="note-item-input"
+                         placeholder="空">
+                  <button class="note-item-delete" @click="deleteItem(card.id, item.id)" title="删除">×</button>
+                </div>
+                <div v-if="!card.items || card.items.length === 0" class="note-items-empty">暂无条目</div>
+              </div>
+
+              <div class="note-add-row">
+                <input :id="'new-item-' + card.id" v-model="newItemTexts[card.id]"
+                       @keyup.enter="addItem(card.id); $event.target.focus()"
+                       class="note-add-input"
+                       :placeholder="'+ 添加条目'">
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- 空状态 -->
-        <div v-else style="text-align:center;padding:60px 20px;color:var(--text-3);background:var(--bg-2);border-radius:12px;border:2px dashed var(--border)">
-          <div style="font-size:48px;margin-bottom:12px">📔</div>
-          <div style="font-size:15px;font-weight:600;margin-bottom:6px">还没有笔记卡片</div>
-          <div style="font-size:12px">在上方输入内容，回车即可创建第一张卡片</div>
+          <div v-else class="notes-empty">
+            <div class="notes-empty-icon">📔</div>
+            <div class="notes-empty-title">还没有笔记卡片</div>
+            <div class="notes-empty-text">在上方输入内容，回车即可创建第一张卡片</div>
+          </div>
         </div>
       </div>
 
@@ -780,6 +726,7 @@
           </div>
 
           <h3 class="settings-section-title">🤖 AI 模型配置</h3>
+          <p class="form-hint" style="margin-bottom:12px">配置文件：<code>data/ai-config.json</code></p>
           <div class="ai-config-list">
             <div class="ai-config-card" v-for="(cfg, i) in aiConfigs" :key="i"
                  :class="{ active: activeAIConfig === i }" @click="activeAIConfig = i">
@@ -789,27 +736,18 @@
                 <span class="ai-config-key" v-if="cfg.api_key">🔑 已配置</span>
                 <span class="ai-config-key empty" v-else>⚠️ 未填 Key</span>
               </div>
-              <div class="ai-config-detail">{{ cfg.model }} · {{ cfg.base_url }}</div>
+              <div class="ai-config-detail">{{ cfg.model }} · {{ cfg.base_url || '未配置地址' }}</div>
             </div>
           </div>
           <div class="ai-config-actions">
             <button class="btn btn-sm" @click="addAIConfig">＋ 添加模型</button>
             <button class="btn btn-sm btn-danger" @click="removeAIConfig" v-if="aiConfigs.length > 1">删除当前</button>
+            <button class="btn btn-sm" @click="showAIConfigJson = !showAIConfigJson">{{ showAIConfigJson ? '隐藏' : '查看' }} JSON</button>
           </div>
+          <pre class="ai-config-json" v-if="showAIConfigJson">{{ aiConfigsJson }}</pre>
 
           <!-- 当前编辑的配置 -->
           <div class="ai-config-edit" v-if="aiConfigs[activeAIConfig]">
-            <div class="form-group">
-              <label>配置名称</label>
-              <input type="text" v-model="aiConfigs[activeAIConfig].name" class="input" @blur="saveAIConfigs" placeholder="如 DeepSeek V4">
-            </div>
-            <div class="form-group">
-              <label>协议</label>
-              <select v-model="aiConfigs[activeAIConfig].provider" class="select-input" @change="saveAIConfigs">
-                <option value="openai">OpenAI 兼容 (DeepSeek/GLM/通义/Ollama)</option>
-                <option value="anthropic">Anthropic Claude (智谱等)</option>
-              </select>
-            </div>
             <div class="form-group">
               <label>快速预设</label>
               <div class="provider-presets">
@@ -820,24 +758,37 @@
               </div>
             </div>
             <div class="form-group">
+              <label>配置名称</label>
+              <input type="text" v-model="aiConfigs[activeAIConfig].name" class="input" placeholder="如 DeepSeek V4">
+            </div>
+            <div class="form-group">
+              <label>协议</label>
+              <select v-model="aiConfigs[activeAIConfig].provider" class="select-input">
+                <option value="openai">OpenAI 兼容 (DeepSeek/GLM/通义/Ollama)</option>
+                <option value="anthropic">Anthropic Claude (智谱等)</option>
+              </select>
+            </div>
+            <div class="form-group">
               <label>API 地址 (Base URL)</label>
-              <input type="text" v-model="aiConfigs[activeAIConfig].base_url" class="input" @blur="saveAIConfigs" placeholder="如 https://api.deepseek.com">
+              <input type="text" v-model="aiConfigs[activeAIConfig].base_url" class="input" placeholder="如 https://api.deepseek.com">
             </div>
             <div class="form-group">
               <label>模型名称</label>
-              <input type="text" v-model="aiConfigs[activeAIConfig].model" class="input" @blur="saveAIConfigs" placeholder="如 deepseek-chat">
+              <input type="text" v-model="aiConfigs[activeAIConfig].model" class="input" placeholder="如 deepseek-chat">
             </div>
             <div class="form-group">
               <label>API Key</label>
-              <input type="password" v-model="aiConfigs[activeAIConfig].api_key" class="input" @blur="saveAIConfigs" placeholder="sk-...">
+              <input type="password" v-model="aiConfigs[activeAIConfig].api_key" class="input" placeholder="sk-...">
             </div>
             <div class="form-group" v-if="aiConfigs[activeAIConfig].provider === 'openai'">
               <label>X-Token</label>
-              <input type="password" v-model="aiConfigs[activeAIConfig].x_token" class="input" @blur="saveAIConfigs" placeholder="可选">
+              <input type="password" v-model="aiConfigs[activeAIConfig].x_token" class="input" placeholder="可选">
             </div>
-            <div class="form-group">
+            <div class="ai-config-save-row">
+              <button class="btn btn-primary" @click="saveAIConfigs">💾 保存配置</button>
               <button class="btn btn-sm" @click="testAIConnection">🔌 测试连接</button>
-              <span class="form-hint" style="margin-left:8px" v-if="aiTestResult">{{ aiTestResult }}</span>
+              <span class="form-hint" v-if="aiTestResult">{{ aiTestResult }}</span>
+              <span class="form-hint ai-saved-hint" v-if="aiConfigSaved">已保存</span>
             </div>
           </div>
 
@@ -859,28 +810,24 @@
           </div>
 
           <h3 class="settings-section-title">🏷️ 自定义标签</h3>
-          <div class="form-group">
-            <div class="tags-editor">
-              <div class="tag-editor-item" v-for="tag in tags" :key="tag.id">
-                <input type="color" v-model="tag.color" class="color-input" @change="updateTag(tag)">
-                <span class="tag-dimension">{{ tag.dimension === 'urgency' ? '紧迫度' : '价值' }}</span>
-                <input type="text" v-model="tag.name" class="input tag-name-input" @blur="updateTag(tag)">
-                <button class="btn-icon btn-danger-icon" @click="removeTag(tag.id)">×</button>
-              </div>
-              <div class="tag-editor-add">
-                <input type="text" v-model="newTagName" class="input" placeholder="新标签名">
-                <select v-model="newTagDimension" class="select-input">
-                  <option value="urgency">紧迫度</option>
-                  <option value="value">价值</option>
-                </select>
-                <button class="btn btn-sm" @click="addTag">添加</button>
-              </div>
+          <div class="tags-editor">
+            <div class="tag-editor-item" v-for="tag in tags" :key="tag.id">
+              <input type="color" v-model="tag.color" class="color-input" @change="updateTag(tag)">
+              <span class="tag-dimension">{{ tag.dimension === 'urgency' ? '紧迫度' : '价值' }}</span>
+              <input type="text" v-model="tag.name" class="input tag-name-input" @blur="updateTag(tag)">
+              <button class="btn-icon btn-danger-icon" @click="removeTag(tag.id)">×</button>
+            </div>
+            <div class="tag-editor-add">
+              <input type="text" v-model="newTagName" class="input" placeholder="新标签名">
+              <select v-model="newTagDimension" class="select-input">
+                <option value="urgency">紧迫度</option>
+                <option value="value">价值</option>
+              </select>
+              <button class="btn btn-sm" @click="addTag">添加</button>
             </div>
           </div>
-        </div>
 
-        <h3 class="settings-section-title">👥 联系人管理</h3>
-        <div class="contacts-section">
+          <h3 class="settings-section-title">👥 联系人管理</h3>
           <div class="contact-list" v-if="contacts.length">
             <div class="contact-item" v-for="c in contacts" :key="c.id">
               <div class="contact-info">
@@ -903,13 +850,13 @@
             <button class="btn btn-sm btn-primary" @click="saveContact">{{ editingContactId ? '更新联系人' : '添加联系人' }}</button>
             <button class="btn btn-sm" v-if="editingContactId" @click="editingContactId = null; Object.assign(contactForm, { name: '', employee_id: '', email: '', relationship: '' })">取消编辑</button>
           </div>
-        </div>
 
-        <h3 class="settings-section-title">💾 数据备份</h3>
-        <div class="backup-section">
-          <button class="btn" @click="downloadBackup">📥 下载数据库备份</button>
-          <button class="btn" @click="restoreBackup">📤 恢复数据库</button>
-          <p class="form-hint">备份为 .db 文件，包含所有任务、目标、联系人等数据</p>
+          <h3 class="settings-section-title">💾 数据备份</h3>
+          <div class="backup-section">
+            <button class="btn" @click="downloadBackup">📥 下载数据库备份</button>
+            <button class="btn" @click="restoreBackup">📤 恢复数据库</button>
+            <p class="form-hint">备份为 .db 文件，包含所有任务、目标、联系人等数据</p>
+          </div>
         </div>
       </div>
     </main>
@@ -963,7 +910,7 @@
                   </div>
                 </template>
                 <!-- 已选已有目录：显示路径，隐藏新建 -->
-                <div v-else style="font-size:11px;color:#16a34a;word-break:break-all;display:flex;align-items:center;gap:4px">
+                <div v-else style="font-size:11px;color:var(--success);word-break:break-all;display:flex;align-items:center;gap:4px">
                   ✅ {{ aiSuggestions.reuse_folder_path }}
                   <button style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-3)" @click="aiSuggestions.reuse_folder_path = ''">× 清除</button>
                 </div>
@@ -973,7 +920,7 @@
               <span class="ai-suggest-label">标签</span>
               <span class="ai-suggest-value">
                 <span class="tag-pill selectable" v-for="(tid, ti) in aiSuggestions.tag_ids" :key="tid"
-                      :style="{ background: (tags.find(t=>t.id===tid)?.color||'#888')+'18', color: tags.find(t=>t.id===tid)?.color||'#888' }"
+                      :style="{ background: (tags.find(t=>t.id===tid)?.color||'#888')+'18', color: tags.find(t=>t.id===tid)?.color||'var(--text-3)' }"
                       @click="aiSuggestions.tag_ids.splice(ti, 1)">
                   {{ tags.find(t => t.id === tid)?.name || tid }} ×
                 </span>
@@ -1248,7 +1195,7 @@
           <div v-if="taskConversations.length === 0" class="conv-empty">暂无关联会话，点击"发现"扫描</div>
           <div class="conv-list" v-else>
             <div class="conv-item-detail" v-for="conv in taskConversations" :key="conv.id">
-              <span class="conv-tool-badge" :style="{ color: conv.tool === 'claude' ? '#7c3aed' : '#16a34a' }">{{ conv.tool === 'claude' ? '🟣' : '🟢' }}</span>
+              <span class="conv-tool-badge" :style="{ color: conv.tool === 'claude' ? 'var(--primary)' : 'var(--success)' }">{{ conv.tool === 'claude' ? '🟣' : '🟢' }}</span>
               <div class="conv-info">
                 <div class="conv-title-text" :title="conv.title">{{ conv.title || conv.session_id }}</div>
                 <div class="conv-date-text">{{ conv.created_at?.slice(0, 10) || '' }}</div>
@@ -1271,7 +1218,7 @@
               <div v-else-if="scanResults.length === 0" style="text-align:center;padding:20px;color:var(--text-3)">未发现相关会话</div>
               <div v-else class="scan-list">
                 <div class="scan-item" v-for="r in scanResults" :key="r.tool + r.session_id">
-                  <span :style="{ color: r.tool === 'claude' ? '#7c3aed' : '#16a34a' }">{{ r.tool === 'claude' ? '🟣' : '🟢' }}</span>
+                  <span :style="{ color: r.tool === 'claude' ? 'var(--primary)' : 'var(--success)' }">{{ r.tool === 'claude' ? '🟣' : '🟢' }}</span>
                   <div class="scan-item-info">
                     <div class="scan-item-title">{{ r.title || r.session_id }}</div>
                     <div class="scan-item-date">{{ r.created_at?.slice(0,10) || '' }}</div>
@@ -1559,6 +1506,7 @@
 
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>
