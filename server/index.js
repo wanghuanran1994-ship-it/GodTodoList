@@ -503,7 +503,8 @@ app.post('/api/pick-folder', asyncHandler(async (req, res) => {
     if (platform === 'darwin') {
       folderPath = execSync(`osascript -e 'choose folder' -e 'POSIX path of result'`, { encoding: 'utf-8', timeout: 60000 }).trim();
     } else if (platform === 'win32') {
-      folderPath = execSync(`powershell -command "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = '选择文件夹'; $f.ShowDialog() | Out-Null; $f.SelectedPath"`, { encoding: 'utf-8', timeout: 60000 }).trim();
+      const psScript = `Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = '选择文件夹'; $f.ShowDialog() | Out-Null; $f.SelectedPath`;
+      folderPath = execSync(`powershell -NoProfile -ExecutionPolicy Bypass -STA -Command "${psScript.replace(/"/g, '\\"')}"`, { encoding: 'utf-8', timeout: 60000 }).trim();
     } else {
       // Linux: try zenity
       folderPath = execSync('zenity --file-selection --directory 2>/dev/null || echo ""', { encoding: 'utf-8', timeout: 60000 }).trim();
