@@ -1,0 +1,6 @@
+node_modules/
+*.db
+data/db.json
+data/godtodo.migrated
+data/uploads/
+.DS_Store
