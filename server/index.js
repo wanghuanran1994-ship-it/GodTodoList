@@ -646,6 +646,7 @@ app.post('/api/ai/decompose', (req, res) => {
       hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'Authorization': `Bearer ${cfg.api_key}` },
     };
+    if (cfg.x_token) options.headers['X-Token'] = cfg.x_token;
   }
 
   const proxyReq = requester.request(options, (proxyRes) => {
@@ -743,6 +744,7 @@ ${existingDirs}
       hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'Authorization': `Bearer ${cfg.api_key}` },
     };
+    if (cfg.x_token) options.headers['X-Token'] = cfg.x_token;
   }
 
   const proxyReq = requester.request(options, (proxyRes) => {
