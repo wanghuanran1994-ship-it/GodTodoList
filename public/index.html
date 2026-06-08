@@ -41,6 +41,10 @@
           <span class="nav-icon">📅</span>
           <span class="nav-label" v-show="!sidebarCollapsed">日历</span>
         </div>
+        <div class="nav-item" :class="{ active: currentView === 'timeline' }" @click="switchView('timeline')">
+          <span class="nav-icon">📐</span>
+          <span class="nav-label" v-show="!sidebarCollapsed">时间轴</span>
+        </div>
         <div class="nav-item" :class="{ active: currentView === 'reports' }" @click="switchView('reports')">
           <span class="nav-icon">🎤</span>
           <span class="nav-label" v-show="!sidebarCollapsed">汇报</span>
@@ -677,12 +681,17 @@
           <div class="cal-week-body">
             <div class="cal-week-col" v-for="d in calendarWeekDays" :key="d.date"
                  :class="{ 'cal-today-col': d.isToday, 'cal-weekend': d.isWeekend }">
+              <div class="cal-week-goal" v-for="g in d.goals" :key="'g'+g.id"
+                   @click="switchView('goals')" :title="'目标: ' + g.title">
+                <span class="goal-flag">🎯</span>
+                <span class="cal-week-goal-title">{{ g.title }}</span>
+              </div>
               <div class="cal-week-task" v-for="t in d.tasks" :key="t.id"
                    :class="['task-status-' + t.status]" @click="selectTask(t.id)">
                 <span class="task-status-dot" :class="t.status"></span>
                 <span class="cal-week-task-title">{{ t.title }}</span>
               </div>
-              <div class="cal-week-empty" v-if="!d.tasks.length"></div>
+              <div class="cal-week-empty" v-if="!d.tasks.length && !d.goals.length"></div>
             </div>
           </div>
         </div>
@@ -698,6 +707,8 @@
                  @click="day.tasks.length && selectTask(day.tasks[0].id)">
               <div class="calendar-day-num">{{ day.day || '' }}</div>
               <div class="calendar-day-tasks">
+                <div class="calendar-goal-flag" v-for="g in day.goals" :key="'g'+g.id"
+                     :title="'🎯 ' + g.title" @click.stop="switchView('goals')">🚩</div>
                 <div class="calendar-task-dot" v-for="t in day.tasks" :key="t.id"
                      :class="t.status" :title="t.title" @click.stop="selectTask(t.id)"></div>
               </div>
@@ -705,9 +716,40 @@
           </div>
         </div>
         <div class="calendar-legend">
+          <span class="legend-item"><span class="legend-flag">🚩</span>目标</span>
           <span class="legend-item"><span class="legend-dot todo"></span>待办</span>
           <span class="legend-item"><span class="legend-dot in-progress"></span>进行中</span>
           <span class="legend-item"><span class="legend-dot done"></span>已完成</span>
+        </div>
+      </div>
+
+      <!-- ========== 时间轴视图 ========== -->
+      <div class="view timeline-view" v-if="currentView === 'timeline'">
+        <div class="view-header">
+          <h1 class="view-title">📐 时间轴</h1>
+          <div class="header-actions">
+            <span style="font-size:var(--text-sm);color:var(--text-3)">近期任务 & 目标排期</span>
+          </div>
+        </div>
+        <div class="timeline-content">
+          <div v-if="!timelineGroups.length" class="timeline-empty">没有即将到期的任务或目标</div>
+          <div class="timeline-group" v-for="group in timelineGroups" :key="group.label">
+            <div class="timeline-group-header" :class="{ today: group.isToday }">
+              <span class="timeline-group-label">{{ group.label }}</span>
+              <span class="timeline-group-date">{{ group.dateRange }}</span>
+            </div>
+            <div class="timeline-items">
+              <div class="timeline-item" v-for="item in group.items" :key="item._key"
+                   @click="item.type === 'task' ? selectTask(item.id) : switchView('goals')">
+                <div class="timeline-item-bar" :class="item.type + '-' + item.status"></div>
+                <span class="timeline-item-icon">{{ item.type === 'goal' ? '🚩' : '●' }}</span>
+                <span class="timeline-item-title">{{ item.title }}</span>
+                <span class="timeline-item-meta" v-if="item.goalName">🎯 {{ item.goalName }}</span>
+                <span class="timeline-item-date">{{ item.date }}</span>
+                <span class="timeline-item-status" v-if="item.type === 'task'">{{ statusLabel(item.status) }}</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 

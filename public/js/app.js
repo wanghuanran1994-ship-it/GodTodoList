@@ -471,6 +471,13 @@ createApp({
       let day = 1 - (startDow - 1); // Monday-based
       const today = new Date();
       const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+      // 预索引：按日期分组 goals（仅活跃的）
+      const activeGoals = goals.value.filter(g => !g.archived && g.target_date);
+      const goalsByDate = {};
+      for (const g of activeGoals) {
+        if (!goalsByDate[g.target_date]) goalsByDate[g.target_date] = [];
+        goalsByDate[g.target_date].push(g);
+      }
 
       for (let w = 0; w < 6; w++) {
         const week = [];
@@ -483,7 +490,8 @@ createApp({
             date: dateStr,
             isToday: dateStr === todayStr,
             otherMonth: !isCurrentMonth,
-            tasks: isCurrentMonth ? tasks.value.filter(t => t.due_date === dateStr) : []
+            tasks: isCurrentMonth ? tasks.value.filter(t => t.due_date === dateStr) : [],
+            goals: isCurrentMonth ? (goalsByDate[dateStr] || []) : []
           });
           day++;
         }
@@ -505,6 +513,13 @@ createApp({
 
       const today = new Date();
       const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+      const activeGoals = goals.value.filter(g => !g.archived && g.target_date);
+      const goalsByDate = {};
+      for (const g of activeGoals) {
+        if (!goalsByDate[g.target_date]) goalsByDate[g.target_date] = [];
+        goalsByDate[g.target_date].push(g);
+      }
+
       const days = [];
       const dayNames = ['一','二','三','四','五','六','日'];
       for (let i = 0; i < 7; i++) {
@@ -517,7 +532,8 @@ createApp({
           dayName: dayNames[i],
           isToday: dateStr === todayStr,
           isWeekend: i >= 5,
-          tasks: tasks.value.filter(t => t.due_date === dateStr)
+          tasks: tasks.value.filter(t => t.due_date === dateStr),
+          goals: goalsByDate[dateStr] || []
         });
       }
       return days;
@@ -547,6 +563,64 @@ createApp({
       calendarYear.value = monday.getFullYear();
       calendarMonth.value = monday.getMonth() + 1;
     }
+
+    // ==================== 时间轴 ====================
+    const timelineGroups = computed(() => {
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+      const tomorrow = new Date(today);
+      tomorrow.setDate(today.getDate() + 1);
+      const tomorrowStr = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth()+1).padStart(2,'0')}-${String(tomorrow.getDate()).padStart(2,'0')}`;
+      // 本周结束（周日）
+      const weekEnd = new Date(today);
+      weekEnd.setDate(today.getDate() + (7 - (today.getDay() || 7)));
+      const weekEndStr = `${weekEnd.getFullYear()}-${String(weekEnd.getMonth()+1).padStart(2,'0')}-${String(weekEnd.getDate()).padStart(2,'0')}`;
+      // 本月结束
+      const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+      const monthEndStr = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth()+1).padStart(2,'0')}-${String(monthEnd.getDate()).padStart(2,'0')}`;
+
+      const groups = [
+        { label: '今天', isToday: true, dateRange: todayStr, items: [] },
+        { label: '明天', isToday: false, dateRange: tomorrowStr, items: [] },
+        { label: '本周', isToday: false, dateRange: todayStr + ' ~ ' + weekEndStr, items: [] },
+        { label: '本月', isToday: false, dateRange: todayStr + ' ~ ' + monthEndStr, items: [] },
+        { label: '更晚', isToday: false, dateRange: monthEndStr + ' 之后', items: [] }
+      ];
+
+      const allItems = [];
+
+      // 未归档的任务（有截止日期）
+      for (const t of tasks.value) {
+        if (!t.due_date || t.status === 'done') continue;
+        allItems.push({
+          type: 'task', id: t.id, title: t.title, date: t.due_date, status: t.status,
+          goalName: t.goal_name || '', _key: 't' + t.id
+        });
+      }
+
+      // 未归档的目标（有目标日期）
+      for (const g of goals.value) {
+        if (!g.target_date || g.archived) continue;
+        allItems.push({
+          type: 'goal', id: g.id, title: g.title, date: g.target_date, status: 'active',
+          goalName: '', _key: 'g' + g.id
+        });
+      }
+
+      // 按日期排序
+      allItems.sort((a, b) => a.date.localeCompare(b.date));
+
+      // 分组
+      for (const item of allItems) {
+        if (item.date === todayStr) groups[0].items.push(item);
+        else if (item.date === tomorrowStr) groups[1].items.push(item);
+        else if (item.date <= weekEndStr) groups[2].items.push(item);
+        else if (item.date <= monthEndStr) groups[3].items.push(item);
+        else groups[4].items.push(item);
+      }
+
+      return groups.filter(g => g.items.length > 0);
+    });
 
     function toggleGoalFilter(goalId) {
       filterGoalId.value = filterGoalId.value === goalId ? null : goalId;
@@ -2392,6 +2466,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       loadTaskConversations, scanConversations, linkConversation, unlinkConversation, continueConversation, quickContinueConversation,
       // Calendar
       calendarYear, calendarMonth, calendarWeeks, calendarViewMode, calendarWeekDays,
+      timelineGroups,
       calendarPrevMonth, calendarNextMonth, calendarPrevWeek, calendarNextWeek,
       // Quick input
       quickInputText, quickInputParsed, createFromQuickInput,
