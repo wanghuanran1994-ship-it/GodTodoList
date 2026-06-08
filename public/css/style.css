@@ -1388,6 +1388,10 @@ a { color: var(--primary); text-decoration: none; }
   color: var(--primary);
   cursor: pointer;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+  min-width: 0;
 }
 
 .path-name:hover {
