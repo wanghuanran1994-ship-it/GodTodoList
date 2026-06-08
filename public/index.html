@@ -571,6 +571,10 @@
                        @blur="renameCard(card.id, $event.target.value)"
                        @keyup.enter="$event.target.blur()"
                        class="note-card-title">
+                <button class="note-card-chat" @click="openNoteChat(card.id, card.title, card.items)"
+                        :title="noteConversations[card.id] ? '继续对话' : '与神对话'">
+                  {{ noteConversations[card.id] ? '💬' : '✨' }}
+                </button>
                 <span class="note-card-count">{{ card.items?.length || 0 }} 条</span>
                 <button class="note-card-delete" @click="deleteCard(card.id)" title="删除卡片">×</button>
               </div>
@@ -1491,7 +1495,8 @@
     <div class="ai-chat-panel" v-if="showAIChat">
       <div class="ai-chat-header">
         <div class="ai-header-left">
-          <h3>🤖 AI 军师</h3>
+          <h3>{{ noteChatCardId ? '📔 笔记对话' : '🤖 AI 军师' }}</h3>
+          <span v-if="noteChatCardId" style="font-size:11px;color:var(--text-3);background:var(--primary-light);padding:2px 8px;border-radius:8px">{{ noteCards.find(c => c.id === noteChatCardId)?.title || '未命名' }}</span>
           <select class="ai-model-select" v-model="activeAIConfig" @change="switchAIModel">
             <option v-for="(cfg, i) in aiConfigs" :key="i" :value="i">{{ cfg.name }}</option>
           </select>

@@ -2192,6 +2192,18 @@ a { color: var(--primary); text-decoration: none; }
   color: var(--text-3);
   white-space: nowrap;
 }
+.note-card-chat {
+  opacity: 0.5;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+.note-card-chat:hover { opacity: 1; background: var(--primary-light); }
+
 .note-card-delete {
   opacity: 0.3;
   font-size: var(--text-xs);

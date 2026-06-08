@@ -183,6 +183,10 @@ createApp({
     const aiStreamContent = ref('');
     const aiChatMessages = ref(null);
 
+    // 笔记卡片 AI 对话
+    const noteChatCardId = ref(null);
+    const noteConversations = reactive({});
+
     // 统计
     const statsDays = ref(30);
     const timeStats = ref([]);
@@ -367,6 +371,7 @@ createApp({
 
     async function loadAll() {
       await Promise.all([loadGoals(), loadRoutines(), loadTasks(), loadTags(), loadSettings(), loadContacts(), refreshTimers()]);
+      loadNoteConversations();
     }
 
     // ==================== 视图切换 ====================
@@ -1787,11 +1792,60 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       aiMessages.value = [];
       aiStreamContent.value = '';
       pressureChatMode.value = false;
+      if (noteChatCardId.value) {
+        delete noteConversations[noteChatCardId.value];
+        saveNoteConversations();
+        noteChatCardId.value = null;
+      }
     }
 
     function closeAIChat() {
       showAIChat.value = false;
       pressureChatMode.value = false;
+      if (noteChatCardId.value) {
+        saveNoteConversations();
+        noteChatCardId.value = null;
+      }
+    }
+
+    function openNoteChat(cardId, cardTitle, cardItems) {
+      noteChatCardId.value = cardId;
+      pressureChatMode.value = false;
+
+      if (noteConversations[cardId]) {
+        aiMessages.value = [...noteConversations[cardId]];
+      } else {
+        const itemsText = (cardItems || []).map((item, i) => `${i + 1}. ${item.content}`).join('\n');
+        const systemMsg = {
+          role: 'system',
+          content: `用户正在整理笔记卡片「${cardTitle || '未命名'}」，以下是卡片中的内容：\n\n${itemsText || '(空卡片)'}\n\n请帮助用户梳理这些内容，理清思路，提取关键点，或者根据用户的提问给出建议。请用中文回复。`
+        };
+        aiMessages.value = [systemMsg, { role: 'assistant', content: '你好！我看到你的笔记卡片 **「' + (cardTitle || '未命名') + '」** 中有 ' + ((cardItems || []).length || 0) + ' 条内容。需要我帮你做什么？比如：\n\n- 梳理和归类这些内容\n- 提取关键点和行动项\n- 根据内容制定计划\n- 或者其他你需要的帮助\n\n直接告诉我就好～' }];
+        noteConversations[cardId] = [...aiMessages.value];
+      }
+      showAIChat.value = true;
+    }
+
+    function saveNoteConversations() {
+      try {
+        const data = {};
+        for (const [k, v] of Object.entries(noteConversations)) {
+          data[k] = v;
+        }
+        localStorage.setItem('godtodo_note_conversations', JSON.stringify(data));
+      } catch (e) {}
+    }
+
+    function loadNoteConversations() {
+      try {
+        const raw = localStorage.getItem('godtodo_note_conversations');
+        if (raw) {
+          const data = JSON.parse(raw);
+          for (const [k, v] of Object.entries(data)) {
+            noteConversations[k] = v;
+          }
+        }
+      } catch (e) {}
     }
 
     async function sendAIMessage() {
@@ -1857,6 +1911,10 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         }
 
         aiMessages.value.push({ role: 'assistant', content: fullContent });
+        if (noteChatCardId.value) {
+          noteConversations[noteChatCardId.value] = [...aiMessages.value];
+          saveNoteConversations();
+        }
       } catch (e) {
         const msg = e.message.includes('Failed to fetch')
           ? '❌ 无法连接服务器，请确认服务已启动（终端运行 node server/index.js）'
@@ -2255,6 +2313,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       openDirBrowser,
       launchTerminal,
       clearAIChat, closeAIChat, sendAIMessage, sendAIPrompt, renderMarkdown,
+      noteChatCardId, noteConversations, openNoteChat,
       // Timer
       activeTimers, startTaskTimer, stopTaskTimer, isTimerActive, getTimerElapsed, formatTime,
       // Today
