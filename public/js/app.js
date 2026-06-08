@@ -389,12 +389,9 @@ createApp({
 
     async function loadTags() {
       tags.value = await api('/api/tags');
-      // 为没有图标的已有标签自动匹配图标
+      // 为没有图标的标签本地匹配图标（不触发 save，避免递归）
       for (const tag of tags.value) {
-        if (!tag.icon) {
-          tag.icon = guessEmoji(tag.name);
-          if (tag.icon) updateTag(tag);
-        }
+        if (!tag.icon) tag.icon = guessEmoji(tag.name);
       }
     }
 
