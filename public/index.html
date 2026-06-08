@@ -707,7 +707,10 @@
           <h3 class="settings-section-title">📁 文件管理</h3>
           <div class="form-group">
             <label>任务文件夹根目录</label>
-            <input type="text" v-model="settings.root_dir" class="input" @blur="saveSettings" placeholder="如 D:\Work\Tasks">
+            <div style="display:flex;gap:8px">
+              <input type="text" v-model="settings.root_dir" class="input" @blur="saveSettings" placeholder="如 D:\Work\Tasks" style="flex:1">
+              <button class="btn btn-sm" @click="pickFolderFor('rootDir')">📂 选择</button>
+            </div>
             <p class="form-hint">任务文件夹将创建在此目录下</p>
           </div>
           <div class="form-group">
@@ -1416,7 +1419,8 @@
           <div class="form-group">
             <label>导入目录</label>
             <div style="display:flex;gap:8px">
-              <input type="text" v-model="importDir" class="input" placeholder="如 D:\Work\Tasks 或 /Users/xxx/Work/Tasks">
+              <input type="text" v-model="importDir" class="input" placeholder="如 D:\Work\Tasks 或 /Users/xxx/Work/Tasks" style="flex:1">
+              <button class="btn btn-sm" @click="pickFolderFor('importDir')">📂 选择</button>
               <button class="btn btn-primary" @click="scanImportDir" :disabled="importScanning">
                 {{ importScanning ? '扫描中...' : '扫描' }}
               </button>

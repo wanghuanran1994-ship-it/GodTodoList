@@ -1632,6 +1632,17 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       }
     }
 
+    // 通用：弹出系统文件夹选择器，结果写入 ref
+    async function pickFolderFor(refKey) {
+      try {
+        const result = await api('/api/pick-folder', { method: 'POST' });
+        if (result && result.path) {
+          if (refKey === 'rootDir') settings.root_dir = result.path;
+          else if (refKey === 'importDir') importDir.value = result.path;
+        }
+      } catch (e) {}
+    }
+
     async function removeGoalPath(goalId, index) {
       const goal = goals.value.find(g => g.id === goalId);
       if (!goal) return;
@@ -2208,7 +2219,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       statusLabel, freqLabel, isOverdue, formatDate, formatChartDate,
       fileIcon, formatSize,
       goalTaskFolders, openFolderFor,
-      addGoalPath, removeGoalPath, addTaskPath, removeTaskPath,
+      pickFolderFor, addGoalPath, removeGoalPath, addTaskPath, removeTaskPath,
       onPathDragStart, onPathDragOver, onPathDrop, setPrimaryPath,
       pathReadmeStatus, checkPathReadme, checkAllPathReadmes,
       expandedProgress, dragPathIndex, dragPathOverIndex,
