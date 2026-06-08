@@ -1018,12 +1018,21 @@ createApp({
       await loadTags();
     }
 
+    const tagUpdating = {};
     async function updateTag(tag) {
+      const version = (tagUpdating[tag.id] || 0) + 1;
+      tagUpdating[tag.id] = version;
+      // 延迟一帧，确保 selectTagEmoji 对 tag.icon 的修改已刷新
+      await nextTick();
+      // 如果有更新的请求已经入队，跳过本次
+      if (tagUpdating[tag.id] !== version) return;
       const icon = tag.icon || guessEmoji(tag.name);
       await api(`/api/tags/${tag.id}`, {
         method: 'PUT',
         body: { name: tag.name, dimension: tag.dimension, color: tag.color, icon }
       });
+      if (tagUpdating[tag.id] !== version) return;
+      delete tagUpdating[tag.id];
       await loadTags();
     }
 
