@@ -1052,7 +1052,7 @@ a { color: var(--primary); text-decoration: none; }
 /* ==================== 目标卡片 ==================== */
 .goals-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
   gap: 16px;
   padding: 20px 24px;
 }
@@ -1324,6 +1324,7 @@ a { color: var(--primary); text-decoration: none; }
   background: var(--bg);
   font-size: var(--text-sm);
   transition: background var(--duration);
+  min-width: 0;
 }
 
 .path-item:hover {
@@ -1335,11 +1336,10 @@ a { color: var(--primary); text-decoration: none; }
   color: var(--primary);
   cursor: pointer;
   white-space: nowrap;
-  flex-shrink: 0;
 }
 
 .path-name:hover {
-  text-decoration: underline;
+  color: var(--primary-hover);
 }
 
 .path-full {
@@ -1349,6 +1349,11 @@ a { color: var(--primary); text-decoration: none; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+
+.path-item .btn {
+  flex-shrink: 0;
 }
 
 .path-task-link {
