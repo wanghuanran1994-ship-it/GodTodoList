@@ -602,7 +602,7 @@ createApp({
       for (const g of goals.value) {
         if (!g.target_date || g.archived) continue;
         allItems.push({
-          type: 'goal', id: g.id, title: g.title, date: g.target_date, status: 'active',
+          type: 'goal', id: g.id, title: g.name, date: g.target_date, status: 'active',
           goalName: '', _key: 'g' + g.id
         });
       }
@@ -952,7 +952,7 @@ createApp({
       Object.assign(newTask, {
         title: '', description: '', goal_id: filterGoalId.value || null,
         routine_id: null, tag_ids: [...filterTagIds.value], due_date: '', estimated_time: 0,
-        people_str: '', create_folder: true
+        people_str: '', create_folder: true, is_report: false, report_meeting: ''
       });
       showQuickAdd.value = true;
       nextTick(() => {
