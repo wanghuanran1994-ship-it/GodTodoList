@@ -2137,6 +2137,12 @@ createApp({
       await api(`/api/note-cards/${cardId}`, { method: 'PUT', body: { category } });
       await loadNoteCards();
     }
+    function cycleCardCategory(card) {
+      const cur = card.category || '随手记';
+      const idx = NOTE_CATEGORIES.findIndex(c => c.key === cur);
+      const next = NOTE_CATEGORIES[(idx + 1) % NOTE_CATEGORIES.length];
+      updateCardCategory(card.id, next.key);
+    }
     async function deleteCard(cardId) {
       await api(`/api/note-cards/${cardId}`, { method: 'DELETE' });
       await loadNoteCards();
@@ -2164,6 +2170,7 @@ createApp({
     let gDragCardId = null, gDragItemId = null;
     function onNoteDragStart(e, cardId, itemId) {
       gDragCardId = cardId; gDragItemId = itemId;
+      gNoteDragged = true;
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', String(itemId));
       e.target.classList.add('dragging');
@@ -2236,12 +2243,18 @@ createApp({
         }
       }
 
+      // URL 占位（先于路径检测，防止路径正则误吞 URL 的路径部分）
+      const urlPlaceholders = [];
+      processed = processed.replace(/(https?:\/\/[^\s<>"'\u4e00-\u9fff\u3000]+)/g, (url) => {
+        try { new URL(url); } catch (e) { return url; }
+        urlPlaceholders.push(url);
+        return '\x00URL' + (urlPlaceholders.length - 1) + '\x00';
+      });
+
       // 检测绝对路径（支持中文、引号包围），替换为占位符
       const pathPlaceholders = [];
       processed = processed.replace(/["']?(\/[^\s<>"']{2,})["']?/g, (fullMatch, p) => {
-        // 排除 markdown 图片语法 ![]()
         if (fullMatch.startsWith('](') || fullMatch.startsWith('![')) return fullMatch;
-        // 排除表格行
         if (/^\|/.test(p.trim())) return fullMatch;
         const clean = p.replace(/["']/g, '');
         pathPlaceholders.push(clean);
@@ -2258,10 +2271,10 @@ createApp({
       html = html.replace(/!\[([^\]]*)\]\((\/uploads\/[^\s)]+)\)/g, (_, alt, url) =>
         `<img src="${url}" alt="${alt}" class="nc-img" loading="lazy" onclick="window.open('${url}')">`);
 
-      // 链接
-      html = html.replace(/(https?:\/\/[^\s<>"']+)/g, (url) => {
-        try { new URL(url); } catch (e) { return url; }
-        return `<a href="${url}" target="_blank" rel="noopener" class="nc-link">${url}</a>`;
+      // 还原 URL
+      urlPlaceholders.forEach((url, idx) => {
+        html = html.replace('\x00URL' + idx + '\x00',
+          `<a href="${url}" target="_blank" rel="noopener" class="nc-link" title="点击打开: ${url}">${url}</a>`);
       });
 
       // 还原表格
@@ -2272,14 +2285,18 @@ createApp({
       // 还原路径
       pathPlaceholders.forEach((p, idx) => {
         html = html.replace('\x00PATH' + idx + '\x00',
-          `<span class="nc-path" data-path="${p.replace(/"/g, '&quot;')}" title="双击打开: ${p.replace(/"/g, '&quot;')}">${p}</span>`);
+          `<span class="nc-path" data-path="${p.replace(/"/g, '&quot;')}" title="点击打开: ${p.replace(/"/g, '&quot;')}">${p}</span>`);
       });
 
       return html;
     }
 
-    // 双击路径 → 用系统默认方式打开
-    function handleContentDblClick(event, item) {
+    // 单击内容：链接→打开，路径→打开，否则→编辑
+    function onNoteClick(event, item) {
+      // 拖拽后不触发编辑
+      if (gNoteDragged) { gNoteDragged = false; return; }
+      // 点击链接让浏览器处理
+      if (event.target.closest('a')) return;
       const pathEl = event.target.closest('.nc-path');
       if (pathEl) {
         event.preventDefault();
@@ -2288,6 +2305,7 @@ createApp({
       }
       startEditItem(item);
     }
+    let gNoteDragged = false;
 
     async function openNotePath(filePath) {
       try {
@@ -3588,10 +3606,10 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       quickNote, appendingNote, appendToReadme,
       noteCards, newCardText, newCardCategory, filterNoteCategory, newItemTexts, editingItemId,
       NOTE_CATEGORIES, filteredNoteCards,
-      loadNoteCards, createCard, renameCard, updateCardCategory, deleteCard,
+      loadNoteCards, createCard, renameCard, updateCardCategory, cycleCardCategory, deleteCard,
       addItem, updateItem, deleteItem, handleNoteKeydown,
       onNoteDragStart, onNoteDragOver, onNoteDrop, onNoteDragEnd,
-      renderItemContent, copyItemContent, handleContentDblClick, startEditItem, saveEditItem, cancelEditItem, handleNotePaste, openNotePath,
+      renderItemContent, copyItemContent, onNoteClick, startEditItem, saveEditItem, cancelEditItem, handleNotePaste, openNotePath,
       unlinkFolder,
       saveGoal, editGoal, archiveGoal, loadGoalStats, goalProgress,
       saveRoutine, editRoutine, archiveRoutine, createTaskFromRoutine,

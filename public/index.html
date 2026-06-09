@@ -624,7 +624,8 @@
           <div v-if="filteredNoteCards.length" class="notes-grid">
             <div v-for="card in filteredNoteCards" :key="card.id" class="note-card">
               <div class="note-card-header">
-                <span class="note-card-category" :style="{ background: (NOTE_CATEGORIES.find(c => c.key === (card.category || '随手记')) || NOTE_CATEGORIES[0]).color }">
+                <span class="note-card-category" :style="{ background: (NOTE_CATEGORIES.find(c => c.key === (card.category || '随手记')) || NOTE_CATEGORIES[0]).color }"
+                      @click.stop="cycleCardCategory(card)" title="点击切换分类">
                   {{ (NOTE_CATEGORIES.find(c => c.key === (card.category || '随手记')) || NOTE_CATEGORIES[0]).icon }}
                   {{ card.category || '随手记' }}
                 </span>
@@ -662,7 +663,7 @@
                             class="note-item-edit"
                             rows="3"></textarea>
                   <!-- 展示模式 -->
-                  <div v-else class="note-item-content" v-html="renderItemContent(item.content)" @dblclick="handleContentDblClick($event, item)"></div>
+                  <div v-else class="note-item-content" v-html="renderItemContent(item.content)" @click="onNoteClick($event, item)"></div>
                   <div class="note-item-actions" v-if="editingItemId !== item.id">
                     <button class="note-item-btn" @click="copyItemContent(item.content)" title="复制">📋</button>
                     <button class="note-item-btn" @click="startEditItem(item)" title="编辑">✏️</button>

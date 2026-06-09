@@ -2767,9 +2767,10 @@ a { color: var(--primary); text-decoration: none; }
   line-height: 1.65;
   word-break: break-word;
   overflow-wrap: anywhere;
+  text-wrap: pretty;
   white-space: pre-wrap;
   min-width: 0;
-  cursor: default;
+  cursor: text;
   padding: 1px 0;
 }
 .note-item-content .nc-empty {
@@ -2871,12 +2872,9 @@ a { color: var(--primary); text-decoration: none; }
   display: flex;
   align-items: center;
   gap: 2px;
-  opacity: 0;
-  transition: opacity 0.15s;
   flex-shrink: 0;
   margin-top: -1px;
 }
-.note-item:hover .note-item-actions { opacity: 1; }
 .note-item-btn {
   width: 26px;
   height: 26px;
