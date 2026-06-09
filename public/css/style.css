@@ -2621,9 +2621,10 @@ a { color: var(--primary); text-decoration: none; }
 .notes-filter-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 
 .notes-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 16px;
+  align-items: flex-start;
 }
 
 /* ════ 卡片 ════ */
@@ -2631,7 +2632,13 @@ a { color: var(--primary); text-decoration: none; }
   background: var(--card);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
-  overflow: hidden;
+  overflow: auto;
+  resize: both;
+  min-width: 380px;
+  width: 460px;
+  max-width: 95vw;
+  min-height: 200px;
+  max-height: 85vh;
   transition: box-shadow 0.2s, border-color 0.2s;
   display: flex;
   flex-direction: column;
@@ -2640,6 +2647,15 @@ a { color: var(--primary); text-decoration: none; }
   border-color: var(--primary-light);
   box-shadow: var(--shadow);
 }
+.note-card::-webkit-resizer {
+  background: linear-gradient(135deg, transparent 30%, var(--primary) 30%, var(--primary) 38%, transparent 38%,
+                                     transparent 48%, var(--primary) 48%, var(--primary) 56%, transparent 56%,
+                                     transparent 66%, var(--primary) 66%, var(--primary) 74%, transparent 74%);
+  border-radius: 0 0 8px 0;
+}
+.note-card::-webkit-scrollbar-corner { background: var(--bg-1); }
+.note-card::-webkit-scrollbar { width: 6px; height: 6px; }
+.note-card::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
 /* ════ 卡片头部 ════ */
 .note-card-header {
@@ -2718,6 +2734,8 @@ a { color: var(--primary); text-decoration: none; }
 /* ════ 条目列表 ════ */
 .note-items {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .note-item {
   padding: 10px 16px;
