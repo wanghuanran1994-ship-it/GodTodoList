@@ -2551,8 +2551,7 @@ a { color: var(--primary); text-decoration: none; }
 
 /* ==================== 笔记视图 ==================== */
 .notes-content {
-  padding: 0 28px 24px;
-  max-width: 1600px;
+  padding: 0 24px 24px;
 }
 
 .notes-capture {
@@ -2632,13 +2631,14 @@ a { color: var(--primary); text-decoration: none; }
   background: var(--card);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   resize: both;
-  min-width: 380px;
-  width: 460px;
-  max-width: 95vw;
-  min-height: 200px;
-  max-height: 85vh;
+  min-width: 420px;
+  width: 560px;
+  max-width: 98%;
+  min-height: 180px;
+  max-height: 80vh;
   transition: box-shadow 0.2s, border-color 0.2s;
   display: flex;
   flex-direction: column;
@@ -2837,16 +2837,18 @@ a { color: var(--primary); text-decoration: none; }
 }
 
 /* ════ 表格 ════ */
-.nc-table {
-  width: 100%;
-  border-collapse: collapse;
+.nc-table-wrap {
+  overflow-x: auto;
   margin: 8px 0;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+}
+.nc-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
   font-size: var(--text-xs);
   line-height: 1.5;
-  white-space: normal;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
 }
 .nc-table th,
 .nc-table td {

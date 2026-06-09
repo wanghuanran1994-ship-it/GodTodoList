@@ -2332,7 +2332,7 @@ createApp({
         table += '</tr>';
       });
       table += '</tbody></table>';
-      return table;
+      return '<div class="nc-table-wrap">' + table + '</div>';
     }
 
     function copyItemContent(text) {
