@@ -2291,12 +2291,12 @@ createApp({
       return html;
     }
 
-    // 单击内容：链接→打开，路径→打开，否则→编辑
+    // 单击内容：链接→打开，图片→不编辑，路径→打开，否则→编辑
     function onNoteClick(event, item) {
       // 拖拽后不触发编辑
       if (gNoteDragged) { gNoteDragged = false; return; }
-      // 点击链接让浏览器处理
-      if (event.target.closest('a')) return;
+      // 点击链接、图片让浏览器/默认行为处理
+      if (event.target.closest('a') || event.target.closest('img')) return;
       const pathEl = event.target.closest('.nc-path');
       if (pathEl) {
         event.preventDefault();
@@ -2360,31 +2360,32 @@ createApp({
       const cd = event.clipboardData;
       if (!cd) return;
 
-      // 1. 检查图片
-      let hasImage = false;
-      if (cd.items) {
-        for (const item of cd.items) {
-          if (item.type.startsWith('image/')) { hasImage = true; break; }
-        }
-      }
-      if (hasImage) {
-        event.preventDefault();
+      // 1. 检查图片（files 兼容 Windows 截图，items 兼容其他来源）
+      const files = cd.files ? [...cd.files] : [];
+      let imageFiles = files.filter(f => f.type.startsWith('image/'));
+      // 也从 items 收集
+      if (!imageFiles.length && cd.items) {
         for (const item of cd.items) {
           if (item.type.startsWith('image/')) {
-            const file = item.getAsFile();
-            if (!file) continue;
-            const formData = new FormData();
-            formData.append('file', file);
-            try {
-              const res = await fetch('/api/upload', { method: 'POST', body: formData });
-              const data = await res.json();
-              if (data.url) {
-                const current = newItemTexts[cardId] || '';
-                newItemTexts[cardId] = current + (current ? '\n' : '') + `![](${data.url})`;
-              }
-            } catch (e) {
-              console.error('图片上传失败:', e);
+            const f = item.getAsFile();
+            if (f) imageFiles.push(f);
+          }
+        }
+      }
+      if (imageFiles.length) {
+        event.preventDefault();
+        for (const file of imageFiles) {
+          const formData = new FormData();
+          formData.append('file', file);
+          try {
+            const res = await fetch('/api/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (data.url) {
+              const current = newItemTexts[cardId] || '';
+              newItemTexts[cardId] = current + (current ? '\n' : '') + `![](${data.url})`;
             }
+          } catch (e) {
+            console.error('图片上传失败:', e);
           }
         }
         return;
