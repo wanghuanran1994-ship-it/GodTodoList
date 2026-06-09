@@ -71,6 +71,7 @@ const ALLOWED_SETTINGS = [
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
+app.use('/uploads', express.static(path.join(__dirname, '..', 'data', 'uploads')));
 
 // 文件上传配置
 const uploadDir = path.join(__dirname, '..', 'data', 'uploads');
@@ -154,6 +155,10 @@ app.delete('/api/routines/:id', (req, res) => {
 // ==================== Tasks ====================
 
 app.get('/api/tasks', (req, res) => res.json(db.getTasks(req.query)));
+
+app.get('/api/tasks/today', (req, res) => {
+  res.json(db.getTodayTasks());
+});
 
 app.get('/api/tasks/:id', (req, res) => {
   const task = db.getTask(Number(req.params.id));
@@ -361,6 +366,14 @@ app.put('/api/tasks/:id/people', (req, res) => {
   res.json({ success: true });
 });
 
+// ==================== 通用文件上传 ====================
+
+app.post('/api/upload', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: '未选择文件' });
+  const url = `/uploads/${req.file.filename}`;
+  res.json({ success: true, url, filename: req.file.originalname });
+});
+
 // ==================== Attachments ====================
 
 app.post('/api/tasks/:id/attachments', upload.array('files', 20), (req, res) => {
@@ -423,10 +436,18 @@ app.post('/api/tasks/:id/open-folder', (req, res) => {
 });
 
 // 用指定编辑器打开任务目录或文件
+const ALLOWED_EDITORS = ['obsidian', 'typora', 'vscode', 'code', 'sublime', 'textedit', 'terminal'];
+
 app.post('/api/open-with-editor', asyncHandler(async (req, res) => {
   const { path: targetPath, editor } = req.body;
   if (!targetPath) return res.status(400).json({ error: '缺少 path 参数' });
   if (!isPathAllowed(targetPath)) return res.status(403).json({ error: '路径不在允许范围内' });
+
+  // 校验 editor 白名单
+  const safeEditor = (editor || '').toLowerCase().trim();
+  if (safeEditor && !ALLOWED_EDITORS.includes(safeEditor)) {
+    return res.status(400).json({ error: '不支持的编辑器: ' + editor });
+  }
 
   // 确保文件存在
   if (!fs.existsSync(targetPath)) {
@@ -445,16 +466,22 @@ app.post('/api/open-with-editor', asyncHandler(async (req, res) => {
   }
 
   let command;
-  if (editor.toLowerCase() === 'obsidian') {
-    // Obsidian 打开文件所在的目录（作为 vault）
+  if (safeEditor === 'obsidian') {
     const dir = require('path').dirname(fileToOpen);
-    command = `open -a Obsidian "${dir}"`;
-  } else if (editor.toLowerCase() === 'typora') {
-    command = `open -a Typora "${fileToOpen}"`;
-  } else if (editor.toLowerCase() === 'vscode' || editor.toLowerCase() === 'code') {
-    command = `open -a "Visual Studio Code" "${fileToOpen}"`;
+    command = `open -a Obsidian "${shellEscape(dir)}"`;
+  } else if (safeEditor === 'typora') {
+    command = `open -a Typora "${shellEscape(fileToOpen)}"`;
+  } else if (safeEditor === 'vscode' || safeEditor === 'code') {
+    command = `open -a "Visual Studio Code" "${shellEscape(fileToOpen)}"`;
+  } else if (safeEditor === 'sublime') {
+    command = `open -a "Sublime Text" "${shellEscape(fileToOpen)}"`;
+  } else if (safeEditor === 'textedit') {
+    command = `open -a TextEdit "${shellEscape(fileToOpen)}"`;
+  } else if (safeEditor === 'terminal') {
+    command = `open "${shellEscape(fileToOpen)}"`;
   } else {
-    command = `open "${fileToOpen}"`;
+    // 兜底：默认用系统关联打开
+    command = `open "${shellEscape(fileToOpen)}"`;
   }
 
   exec(command, (err) => {
@@ -644,10 +671,6 @@ app.post('/api/tasks/:id/toggle-today', (req, res) => {
   const task = db.getTask(Number(req.params.id));
   if (task?.folder_path) fm.writeTaskReadme(task, db.getGoals(), db.getRoutines(), db.getTags());
   res.json({ success: true });
-});
-
-app.get('/api/tasks/today', (req, res) => {
-  res.json(db.getTodayTasks());
 });
 
 // ==================== AI Subtask Decompose ====================
@@ -1421,8 +1444,8 @@ app.get('/api/note-cards', (req, res) => {
 });
 
 app.post('/api/note-cards', (req, res) => {
-  const { title, content } = req.body;
-  const id = db.createNoteCard(title || '', content || '');
+  const { title, content, category } = req.body;
+  const id = db.createNoteCard(title || '', content || '', category);
   res.json({ id });
 });
 
@@ -1437,12 +1460,21 @@ app.delete('/api/note-cards/:id', (req, res) => {
 });
 
 app.post('/api/note-cards/:id/items', (req, res) => {
-  const id = db.addNoteItem(Number(req.params.id), req.body.content || '');
+  const id = db.addNoteItem(Number(req.params.id), req.body.content || '', req.body.parent_id || null);
   res.json({ id });
 });
 
 app.put('/api/note-items/:id', (req, res) => {
-  db.updateNoteItem(Number(req.params.id), req.body.content || '');
+  const body = req.body;
+  db.updateNoteItem(Number(req.params.id), body.content || '', body.parent_id);
+  res.json({ success: true });
+});
+
+app.put('/api/note-items/reorder', (req, res) => {
+  const items = req.body.items || [];
+  for (const it of items) {
+    db.reorderNoteItem(it.id, it.sort_order);
+  }
   res.json({ success: true });
 });
 
@@ -1471,6 +1503,13 @@ app.get('/api/report-meetings', (req, res) => {
   res.json(db.getReportMeetings());
 });
 
+// ==================== 全局错误处理 ====================
+
+app.use((err, req, res, next) => {
+  console.error('未捕获错误:', err);
+  res.status(500).json({ error: err.message || '服务器内部错误' });
+});
+
 // ==================== SPA fallback ====================
 
 app.get('*', (req, res) => {
@@ -1480,7 +1519,13 @@ app.get('*', (req, res) => {
 // ==================== Start ====================
 
 (async () => {
-  await db.init();
+  try {
+    await db.init();
+  } catch (e) {
+    console.error('❌ 数据库初始化失败:', e.message);
+    console.error('请检查 data 目录权限或删除 data/godtodo.db 后重试');
+    process.exit(1);
+  }
 
   // 首次启动：从 SQLite 迁移 AI 配置到 JSON 文件
   if (!fs.existsSync(AI_CONFIG_FILE)) {

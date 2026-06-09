@@ -41,13 +41,9 @@
           <span class="nav-icon">📅</span>
           <span class="nav-label" v-show="!sidebarCollapsed">日历</span>
         </div>
-        <div class="nav-item" :class="{ active: currentView === 'timeline' }" @click="switchView('timeline')">
-          <span class="nav-icon">📐</span>
-          <span class="nav-label" v-show="!sidebarCollapsed">时间轴</span>
-        </div>
-        <div class="nav-item" :class="{ active: currentView === 'reports' }" @click="switchView('reports')">
-          <span class="nav-icon">🎤</span>
-          <span class="nav-label" v-show="!sidebarCollapsed">汇报</span>
+<div class="nav-item" :class="{ active: currentView === 'graph' }" @click="switchView('graph')">
+          <span class="nav-icon">🕸️</span>
+          <span class="nav-label" v-show="!sidebarCollapsed">关联</span>
         </div>
         <div class="nav-item" :class="{ active: currentView === 'notes' }" @click="switchView('notes')">
           <span class="nav-icon">📔</span>
@@ -218,7 +214,8 @@
                 </div>
                 <div v-else class="report-placeholder">
                   <div class="report-placeholder-icon">📊</div>
-                  <div class="report-placeholder-text">选择左侧报告查看，或点击「AI 生成」</div>
+                  <div class="report-placeholder-text">选择左侧报告查看</div>
+                  <div class="report-placeholder-hint">或点击右上角「🤖 AI 生成」自动汇总今日/本周工作内容</div>
                 </div>
               </div>
             </div>
@@ -250,7 +247,7 @@
             <button class="filter-btn" :class="{ active: filterStatus === 'in-progress' && !filterReportOnly }" @click="filterStatus = 'in-progress'; filterToday = false; filterReportOnly = false">进行中</button>
             <button class="filter-btn" :class="{ active: filterStatus === 'done' && !filterReportOnly }" @click="filterStatus = 'done'; filterToday = false; filterReportOnly = false">已完成</button>
             <button class="filter-btn" :class="{ active: filterStatus === 'shelved' && !filterReportOnly }" @click="filterStatus = 'shelved'; filterToday = false; filterReportOnly = false">搁置</button>
-            <button class="filter-btn" :class="{ active: filterReportOnly }" @click="filterReportOnly = !filterReportOnly; filterToday = false; filterStatus = null">📊 汇报</button>
+            <button class="filter-btn" :class="{ active: filterReportOnly && filterStatus === null && !filterToday }" @click="filterReportOnly = !filterReportOnly; filterToday = false; filterStatus = null">📊 汇报</button>
             <button class="filter-btn" :class="{ active: filterToday && !filterReportOnly }" @click="filterToday = !filterToday; filterReportOnly = false; filterStatus = null">☀️ 今日</button>
           </div>
           <div class="filter-group" v-if="tags.length">
@@ -529,101 +526,42 @@
       <!-- ========== 惯例视图 ========== -->
       <div class="view routines-view" v-if="currentView === 'routines'">
         <div class="view-header">
-          <h1 class="view-title">惯例管理</h1>
-          <button class="btn btn-primary" @click="showRoutineModal = true">＋ 新建惯例</button>
-        </div>
-        <div class="routines-grid">
-          <div class="routine-card" v-for="routine in routines" :key="routine.id">
-            <div class="routine-header">
-              <h3>{{ routine.name }}</h3>
-              <span class="routine-freq">{{ freqLabel(routine.frequency) }}</span>
-            </div>
-            <p class="routine-desc" v-if="routine.description">{{ routine.description }}</p>
-            <div class="routine-goal" v-if="routine.goal_name">
-              <span class="goal-dot" :style="{ background: routine.goal_color || 'var(--primary)' }"></span>
-              {{ routine.goal_name }}
-            </div>
-            <div class="routine-actions">
-              <button class="btn btn-sm" @click="editRoutine(routine)">编辑</button>
-              <button class="btn btn-sm" @click="createTaskFromRoutine(routine)">生成任务</button>
-              <button class="btn btn-sm btn-danger" @click="archiveRoutine(routine.id)">归档</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ========== 笔记视图 ========== -->
-      <div class="view notes-view" v-if="currentView === 'notes'">
-        <div class="view-header">
-          <h1 class="view-title">📔 笔记</h1>
-        </div>
-
-        <div class="notes-content">
-          <!-- 快捷捕获栏 -->
-          <div class="notes-capture" :class="{ focused: newCardText }">
-            <div class="notes-capture-icon">💡</div>
-            <input type="text" v-model="newCardText" class="notes-capture-input"
-                   placeholder="记录想法、命令、链接... 回车创建卡片"
-                   @keyup.enter="createCard">
-          </div>
-
-          <!-- 卡片网格 -->
-          <div v-if="noteCards.length" class="notes-grid">
-            <div v-for="card in noteCards" :key="card.id" class="note-card">
-              <div class="note-card-header">
-                <input :value="card.title || '未命名'"
-                       @blur="renameCard(card.id, $event.target.value)"
-                       @keyup.enter="$event.target.blur()"
-                       class="note-card-title">
-                <button class="note-card-chat" @click="openNoteChat(card.id, card.title, card.items)"
-                        :title="noteConversations[card.id] ? '继续对话' : '与神对话'">
-                  {{ noteConversations[card.id] ? '💬' : '✨' }}
-                </button>
-                <span class="note-card-count">{{ card.items?.length || 0 }} 条</span>
-                <button class="note-card-delete" @click="deleteCard(card.id)" title="删除卡片">×</button>
-              </div>
-
-              <div class="note-items">
-                <div v-for="item in card.items" :key="item.id" class="note-item">
-                  <span class="note-item-bullet">•</span>
-                  <input :value="item.content"
-                         @blur="updateItem(item.id, $event.target.value)"
-                         @keyup.enter="$event.target.blur()"
-                         class="note-item-input"
-                         placeholder="空">
-                  <button class="note-item-delete" @click="deleteItem(card.id, item.id)" title="删除">×</button>
-                </div>
-                <div v-if="!card.items || card.items.length === 0" class="note-items-empty">暂无条目</div>
-              </div>
-
-              <div class="note-add-row">
-                <input :id="'new-item-' + card.id" v-model="newItemTexts[card.id]"
-                       @keyup.enter="addItem(card.id); $event.target.focus()"
-                       class="note-add-input"
-                       :placeholder="'+ 添加条目'">
-              </div>
-            </div>
-          </div>
-
-          <div v-else class="notes-empty">
-            <div class="notes-empty-icon">📔</div>
-            <div class="notes-empty-title">还没有笔记卡片</div>
-            <div class="notes-empty-text">在上方输入内容，回车即可创建第一张卡片</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ========== 汇报视图 ========== -->
-      <div class="view reports-view" v-if="currentView === 'reports'">
-        <div class="view-header">
-          <h1 class="view-title">📊 汇报</h1>
+          <h1 class="view-title">🔄 惯例</h1>
           <div class="header-actions">
+            <button class="btn btn-sm" @click="showRoutineModal = true">＋ 新建惯例</button>
             <button class="btn btn-primary" @click="newTask.is_report = true; showQuickAdd = true">＋ 新建汇报任务</button>
           </div>
         </div>
 
-        <!-- 按会议分组 -->
-        <div class="reports-content" v-if="groupedReportTasks.length">
+        <!-- 惯例模板 -->
+        <div class="routines-section">
+          <h3 class="routines-section-title">📋 惯例模板</h3>
+          <div class="routines-grid" v-if="routines.length">
+            <div class="routine-card" v-for="routine in routines" :key="routine.id">
+              <div class="routine-header">
+                <h3>{{ routine.name }}</h3>
+                <span class="routine-freq">{{ freqLabel(routine.frequency) }}</span>
+              </div>
+              <p class="routine-desc" v-if="routine.description">{{ routine.description }}</p>
+              <div class="routine-goal" v-if="routine.goal_name">
+                <span class="goal-dot" :style="{ background: routine.goal_color || 'var(--primary)' }"></span>
+                {{ routine.goal_name }}
+              </div>
+              <div class="routine-actions">
+                <button class="btn btn-sm" @click="editRoutine(routine)">编辑</button>
+                <button class="btn btn-sm" @click="createTaskFromRoutine(routine)">生成任务</button>
+                <button class="btn btn-sm btn-danger" @click="archiveRoutine(routine.id)">归档</button>
+              </div>
+            </div>
+          </div>
+          <div class="empty-state" v-else style="padding:20px">
+            <p style="font-size:var(--text-sm);color:var(--text-4)">还没有惯例模板，创建一个来定期生成任务</p>
+          </div>
+        </div>
+
+        <!-- 汇报任务（按会议分组） -->
+        <div class="routines-section" v-if="groupedReportTasks.length">
+          <h3 class="routines-section-title">📊 汇报任务</h3>
           <div class="report-group" v-for="[meeting, tasks] in groupedReportTasks" :key="meeting">
             <div class="report-group-header">
               <span class="report-meeting-name">📋 {{ meeting }}</span>
@@ -646,19 +584,122 @@
         </div>
 
         <!-- 空状态 -->
-        <div class="empty-state" v-else>
-          <div class="empty-icon">📊</div>
-          <p>暂无汇报任务</p>
-          <p style="font-size:var(--text-sm);color:var(--text-4)">在任务详情中勾选「这是汇报」，或从惯例创建汇报任务</p>
-          <button class="btn btn-primary" style="margin-top:12px" @click="switchView('kanban'); showQuickAdd = true">去创建</button>
+        <div class="empty-state" v-if="!routines.length && !groupedReportTasks.length" style="margin-top:40px">
+          <div class="empty-icon">🔄</div>
+          <p>暂无惯例</p>
+          <p style="font-size:var(--text-sm);color:var(--text-4)">创建惯例模板自动生成周期性任务，或创建汇报任务用于会议汇报</p>
+        </div>
+      </div>
+
+      <!-- ========== 笔记视图 ========== -->
+      <div class="view notes-view" v-if="currentView === 'notes'">
+        <div class="view-header">
+          <h1 class="view-title">📔 笔记</h1>
+        </div>
+
+        <div class="notes-content">
+          <!-- 快捷捕获栏 -->
+          <div class="notes-capture" :class="{ focused: newCardText }">
+            <select v-model="newCardCategory" class="notes-category-select">
+              <option v-for="cat in NOTE_CATEGORIES" :key="cat.key" :value="cat.key">{{ cat.icon }} {{ cat.key }}</option>
+            </select>
+            <div class="notes-capture-icon">💡</div>
+            <input type="text" v-model="newCardText" class="notes-capture-input"
+                   placeholder="记录想法、命令、链接... 回车创建卡片"
+                   @keyup.enter="createCard">
+          </div>
+
+          <!-- 分类筛选 -->
+          <div class="notes-filter" v-if="noteCards.length">
+            <button class="notes-filter-btn" :class="{ active: filterNoteCategory === null }" @click="filterNoteCategory = null">全部</button>
+            <button v-for="cat in NOTE_CATEGORIES" :key="cat.key"
+                    class="notes-filter-btn"
+                    :class="{ active: filterNoteCategory === cat.key }"
+                    @click="filterNoteCategory = cat.key">
+              {{ cat.icon }} {{ cat.key }}
+            </button>
+          </div>
+
+          <!-- 卡片网格 -->
+          <div v-if="filteredNoteCards.length" class="notes-grid">
+            <div v-for="card in filteredNoteCards" :key="card.id" class="note-card">
+              <div class="note-card-header">
+                <span class="note-card-category" :style="{ background: (NOTE_CATEGORIES.find(c => c.key === (card.category || '随手记')) || NOTE_CATEGORIES[0]).color }">
+                  {{ (NOTE_CATEGORIES.find(c => c.key === (card.category || '随手记')) || NOTE_CATEGORIES[0]).icon }}
+                  {{ card.category || '随手记' }}
+                </span>
+                <input :value="card.title || '未命名'"
+                       @blur="renameCard(card.id, $event.target.value)"
+                       @keyup.enter="$event.target.blur()"
+                       class="note-card-title">
+                <button class="note-card-chat" @click="openNoteChat(card.id, card.title, card.items)"
+                        :title="noteConversations[card.id] ? '继续对话' : 'AI 对话'">
+                  {{ noteConversations[card.id] ? '💬' : '✨' }}
+                </button>
+                <span class="note-card-count">{{ card.items?.length || 0 }}</span>
+                <button class="note-card-delete" @click="deleteCard(card.id)" title="删除卡片">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+
+              <div class="note-items">
+                <div v-for="item in card.items" :key="item.id" class="note-item"
+                     draggable="true"
+                     :class="{ editing: editingItemId === item.id, 'note-item-child': item.parent_id }"
+                     :style="{ paddingLeft: item.parent_id ? '28px' : '' }"
+                     @dragstart="onNoteDragStart($event, card.id, item.id)"
+                     @dragover.prevent="onNoteDragOver($event, card.id, item.id)"
+                     @drop="onNoteDrop($event, card.id, item.id)"
+                     @dragend="onNoteDragEnd">
+                  <span class="note-item-bullet" :class="{ child: item.parent_id }"></span>
+                  <!-- 编辑模式 -->
+                  <textarea v-if="editingItemId === item.id"
+                            :value="item.content"
+                            @keyup.esc="cancelEditItem()"
+                            @keyup.meta.enter="saveEditItem(item.id, $event.target.value)"
+                            @keyup.ctrl.enter="saveEditItem(item.id, $event.target.value)"
+                            @blur="saveEditItem(item.id, $event.target.value)"
+                            class="note-item-edit"
+                            rows="3"></textarea>
+                  <!-- 展示模式 -->
+                  <div v-else class="note-item-content" v-html="renderItemContent(item.content)" @dblclick="handleContentDblClick($event, item)"></div>
+                  <div class="note-item-actions" v-if="editingItemId !== item.id">
+                    <button class="note-item-btn" @click="copyItemContent(item.content)" title="复制">📋</button>
+                    <button class="note-item-btn" @click="startEditItem(item)" title="编辑">✏️</button>
+                    <button class="note-item-btn note-item-btn-danger" @click="deleteItem(card.id, item.id)" title="删除">🗑</button>
+                  </div>
+                </div>
+                <div v-if="!card.items || card.items.length === 0" class="note-items-empty">
+                  <span>双击下方输入框添加第一条笔记</span>
+                </div>
+              </div>
+
+              <div class="note-add-row" @paste="handleNotePaste($event, card.id)">
+                <input :id="'new-item-' + card.id" v-model="newItemTexts[card.id]"
+                       @keyup.enter="addItem(card.id); $nextTick(() => document.getElementById('new-item-' + card.id)?.focus())"
+                       @keydown.tab="handleNoteKeydown($event, card.id)"
+                       class="note-add-input"
+                       :placeholder="'＋ 添加条目（Tab缩进为子项）'">
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="notes-empty">
+            <div class="notes-empty-icon">📔</div>
+            <div class="notes-empty-title">还没有笔记卡片</div>
+            <div class="notes-empty-text">在上方输入内容，回车即可创建第一张卡片</div>
+          </div>
         </div>
       </div>
 
       <!-- ========== 日历视图 ========== -->
       <div class="view calendar-view" v-if="currentView === 'calendar'">
         <div class="view-header">
-          <h1 class="view-title">日历</h1>
-          <div class="header-actions">
+          <div class="cal-tabs">
+            <button class="cal-tab" :class="{ active: calendarTab === 'calendar' }" @click="calendarTab = 'calendar'">📅 日历</button>
+            <button class="cal-tab" :class="{ active: calendarTab === 'gantt' }" @click="calendarTab = 'gantt'">📊 甘特图</button>
+          </div>
+          <div class="header-actions" v-if="calendarTab === 'calendar'">
             <div class="cal-view-toggle">
               <button class="btn btn-xs" :class="{ 'btn-primary': calendarViewMode === 'week' }" @click="calendarViewMode = 'week'">周</button>
               <button class="btn btn-xs" :class="{ 'btn-primary': calendarViewMode === 'month' }" @click="calendarViewMode = 'month'">月</button>
@@ -669,87 +710,143 @@
           </div>
         </div>
 
-        <!-- 周视图 -->
-        <div class="calendar-week-view" v-if="calendarViewMode === 'week'">
-          <div class="cal-week-header">
-            <div class="cal-week-day-header" v-for="d in calendarWeekDays" :key="d.date"
-                 :class="{ 'cal-today-header': d.isToday, 'cal-weekend': d.isWeekend }">
-              <span class="cal-week-dayname">{{ d.dayName }}</span>
-              <span class="cal-week-daynum" :class="{ 'cal-today-num': d.isToday }">{{ d.day }}</span>
+        <!-- 日历标签页 -->
+        <template v-if="calendarTab === 'calendar'">
+          <!-- 周视图 -->
+          <div class="calendar-week-view" v-if="calendarViewMode === 'week'">
+            <div class="cal-week-header">
+              <div class="cal-week-day-header" v-for="d in calendarWeekDays" :key="d.date"
+                   :class="{ 'cal-today-header': d.isToday, 'cal-weekend': d.isWeekend }">
+                <span class="cal-week-dayname">{{ d.dayName }}</span>
+                <span class="cal-week-daynum" :class="{ 'cal-today-num': d.isToday }">{{ d.day }}</span>
+              </div>
+            </div>
+            <div class="cal-week-body">
+              <div class="cal-week-col" v-for="d in calendarWeekDays" :key="d.date"
+                   :class="{ 'cal-today-col': d.isToday, 'cal-weekend': d.isWeekend }">
+                <div class="cal-week-goal" v-for="g in d.goals" :key="'g'+g.id"
+                     @click="switchView('goals')" :title="'目标: ' + g.title">
+                  <span class="goal-flag">🎯</span>
+                  <span class="cal-week-goal-title">{{ g.title }}</span>
+                </div>
+                <div class="cal-week-task" v-for="t in d.tasks" :key="t.id"
+                     :class="['task-status-' + t.status]" @click="selectTask(t.id)">
+                  <span class="task-status-dot" :class="t.status"></span>
+                  <span class="cal-week-task-title">{{ t.title }}</span>
+                </div>
+                <div class="cal-week-empty" v-if="!d.tasks.length && !d.goals.length"></div>
+              </div>
             </div>
           </div>
-          <div class="cal-week-body">
-            <div class="cal-week-col" v-for="d in calendarWeekDays" :key="d.date"
-                 :class="{ 'cal-today-col': d.isToday, 'cal-weekend': d.isWeekend }">
-              <div class="cal-week-goal" v-for="g in d.goals" :key="'g'+g.id"
-                   @click="switchView('goals')" :title="'目标: ' + g.title">
-                <span class="goal-flag">🎯</span>
-                <span class="cal-week-goal-title">{{ g.title }}</span>
-              </div>
-              <div class="cal-week-task" v-for="t in d.tasks" :key="t.id"
-                   :class="['task-status-' + t.status]" @click="selectTask(t.id)">
-                <span class="task-status-dot" :class="t.status"></span>
-                <span class="cal-week-task-title">{{ t.title }}</span>
-              </div>
-              <div class="cal-week-empty" v-if="!d.tasks.length && !d.goals.length"></div>
-            </div>
-          </div>
-        </div>
 
-        <!-- 月视图 -->
-        <div class="calendar-grid" v-if="calendarViewMode === 'month'">
-          <div class="calendar-header-row">
-            <div class="calendar-cell header-cell" v-for="d in ['一','二','三','四','五','六','日']" :key="d">{{ d }}</div>
-          </div>
-          <div class="calendar-week" v-for="(week, wi) in calendarWeeks" :key="wi">
-            <div class="calendar-cell" v-for="(day, di) in week" :key="di"
-                 :class="{ today: day.isToday, 'other-month': day.otherMonth }"
-                 @click="day.tasks.length && selectTask(day.tasks[0].id)">
-              <div class="calendar-day-num">{{ day.day || '' }}</div>
-              <div class="calendar-day-tasks">
-                <div class="calendar-goal-flag" v-for="g in day.goals" :key="'g'+g.id"
-                     :title="'🎯 ' + g.title" @click.stop="switchView('goals')">🚩</div>
-                <div class="calendar-task-dot" v-for="t in day.tasks" :key="t.id"
-                     :class="t.status" :title="t.title" @click.stop="selectTask(t.id)"></div>
+          <!-- 月视图 -->
+          <div class="calendar-grid" v-if="calendarViewMode === 'month'">
+            <div class="calendar-header-row">
+              <div class="calendar-cell header-cell" v-for="d in ['一','二','三','四','五','六','日']" :key="d">{{ d }}</div>
+            </div>
+            <div class="calendar-week" v-for="(week, wi) in calendarWeeks" :key="wi">
+              <div class="calendar-cell" v-for="(day, di) in week" :key="di"
+                   :class="{ today: day.isToday, 'other-month': day.otherMonth }"
+                   @click="day.tasks.length && selectTask(day.tasks[0].id)">
+                <div class="calendar-day-num">{{ day.day || '' }}</div>
+                <div class="calendar-day-tasks">
+                  <div class="calendar-goal-flag" v-for="g in day.goals" :key="'g'+g.id"
+                       :title="'🎯 ' + g.title" @click.stop="switchView('goals')">🚩</div>
+                  <div class="calendar-task-dot" v-for="t in day.tasks" :key="t.id"
+                       :class="t.status" :title="t.title" @click.stop="selectTask(t.id)"></div>
+                </div>
               </div>
             </div>
           </div>
+          <div class="calendar-legend">
+            <span class="legend-item"><span class="legend-flag">🚩</span>目标</span>
+            <span class="legend-item"><span class="legend-dot todo"></span>待办</span>
+            <span class="legend-item"><span class="legend-dot in-progress"></span>进行中</span>
+            <span class="legend-item"><span class="legend-dot done"></span>已完成</span>
+          </div>
+        </template>
+
+        <!-- 甘特图标签页 -->
+        <div class="calendar-gantt" v-if="calendarTab === 'gantt' && ganttData">
+          <div class="gantt-content">
+            <!-- 双层时间轴：月 + 日 -->
+            <div class="gantt-scale">
+              <div class="gantt-scale-spacer"></div>
+              <div class="gantt-scale-body" ref="ganttScaleBody"
+                   @scroll="syncGanttScroll($event.target, ganttRows)">
+                <div class="gantt-month-row">
+                  <div v-for="(m, mi) in ganttData.months" :key="'m'+mi"
+                       class="gantt-month-col" :style="{ width: m.count * 32 + 'px' }">
+                    {{ m.label }}
+                  </div>
+                </div>
+                <div class="gantt-day-row">
+                  <div v-for="(d, di) in ganttData.days" :key="'d'+di"
+                       class="gantt-day-col"
+                       :class="{ today: d.isToday, weekend: d.isWeekend }">
+                    {{ d.label }}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <!-- 任务行 -->
+            <div class="gantt-rows" ref="ganttRows"
+                 @scroll="syncGanttScroll($event.target, ganttScaleBody)">
+              <template v-for="group in ganttData.groups" :key="group.goalId || '_none'">
+                <div class="gantt-goal-row">
+                  <span class="gantt-goal-dot" :style="{ background: group.color }"></span>
+                  <span>{{ group.goalName }}</span>
+                </div>
+                <div v-for="t in group.tasks" :key="t.id" class="gantt-task-row"
+                     @click="selectTask(t.id)">
+                  <div class="gantt-task-label">{{ t.title }}</div>
+                  <div class="gantt-task-track" :style="{ width: ganttData.trackWidth + 'px' }">
+                    <div class="gantt-today-line"
+                         :style="{ left: ganttData.todayPercent + '%' }"></div>
+                    <div class="gantt-task-bar"
+                         :style="{ left: t.barLeft + '%', width: t.barWidth + '%', background: group.color }">
+                      <span v-for="(seg, si) in t.segments" :key="si"
+                            class="gantt-bar-seg"
+                            :style="{ left: seg.left + '%', width: seg.width + '%', opacity: seg.alpha }"></span>
+                      <span class="gantt-bar-label">{{ t.dateLabel }}</span>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+            <div v-if="!ganttData.groups.length" class="gantt-empty">
+              <div style="font-size:var(--text-sm);color:var(--text-4)">没有待排期的活跃任务</div>
+            </div>
+          </div>
         </div>
-        <div class="calendar-legend">
-          <span class="legend-item"><span class="legend-flag">🚩</span>目标</span>
-          <span class="legend-item"><span class="legend-dot todo"></span>待办</span>
-          <span class="legend-item"><span class="legend-dot in-progress"></span>进行中</span>
-          <span class="legend-item"><span class="legend-dot done"></span>已完成</span>
+        <div class="gantt-empty-state" v-if="calendarTab === 'gantt' && !ganttData">
+          <div class="empty-icon">📊</div>
+          <p>没有待排期的活跃任务</p>
         </div>
       </div>
 
-      <!-- ========== 时间轴视图 ========== -->
-      <div class="view timeline-view" v-if="currentView === 'timeline'">
+      <!-- ========== 关联图谱视图 ========== -->
+      <div class="view graph-view" v-if="currentView === 'graph'">
         <div class="view-header">
-          <h1 class="view-title">📐 时间轴</h1>
-          <div class="header-actions">
-            <span style="font-size:var(--text-sm);color:var(--text-3)">近期任务 & 目标排期</span>
+          <h1 class="view-title">🕸️ 关联图谱</h1>
+        </div>
+        <div class="graph-legend">
+          <span class="graph-legend-item"><span class="graph-legend-dot node"></span> 目标</span>
+          <span class="graph-legend-item"><span class="graph-legend-dot task"></span> 任务</span>
+          <span class="graph-legend-item"><span class="graph-legend-line"></span> 共享标签/人员</span>
+          <div class="graph-zoom-bar">
+            <button class="graph-zoom-btn" @click="graphZoomOut" title="缩小">−</button>
+            <input type="range" class="graph-zoom-slider" min="20" max="300" :value="Math.round(graphZoom * 100)" @input="graphZoomTo($event.target.value)">
+            <button class="graph-zoom-btn" @click="graphZoomIn" title="放大">＋</button>
+            <span class="graph-zoom-pct">{{ Math.round(graphZoom * 100) }}%</span>
           </div>
         </div>
-        <div class="timeline-content">
-          <div v-if="!timelineGroups.length" class="timeline-empty">没有即将到期的任务或目标</div>
-          <div class="timeline-group" v-for="group in timelineGroups" :key="group.label">
-            <div class="timeline-group-header" :class="{ today: group.isToday }">
-              <span class="timeline-group-label">{{ group.label }}</span>
-              <span class="timeline-group-date">{{ group.dateRange }}</span>
-            </div>
-            <div class="timeline-items">
-              <div class="timeline-item" v-for="item in group.items" :key="item._key"
-                   @click="item.type === 'task' ? selectTask(item.id) : switchView('goals')">
-                <div class="timeline-item-bar" :class="item.type + '-' + item.status"></div>
-                <span class="timeline-item-icon">{{ item.type === 'goal' ? '🚩' : '●' }}</span>
-                <span class="timeline-item-title">{{ item.title }}</span>
-                <span class="timeline-item-meta" v-if="item.goalName">🎯 {{ item.goalName }}</span>
-                <span class="timeline-item-date">{{ item.date }}</span>
-                <span class="timeline-item-status" v-if="item.type === 'task'">{{ statusLabel(item.status) }}</span>
-              </div>
-            </div>
-          </div>
+        <div class="graph-canvas-wrap" ref="graphCanvasWrap">
+          <canvas ref="graphCanvas" @mousedown="graphMouseDown" @mousemove="graphMouseMove" @mouseup="graphMouseUp" @wheel="graphWheel" @click="graphClick" @dblclick="graphDblClick"></canvas>
+        </div>
+        <div class="graph-tooltip" v-if="graphTooltip" :style="{ left: graphTooltip.x + 'px', top: graphTooltip.y + 'px' }">
+          <div class="graph-tooltip-title">{{ graphTooltip.title }}</div>
+          <div class="graph-tooltip-row" v-for="r in graphTooltip.rows" :key="r">{{ r }}</div>
         </div>
       </div>
 

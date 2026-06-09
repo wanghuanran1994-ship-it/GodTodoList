@@ -63,7 +63,7 @@ function writeTaskReadme(task, goals, routines, tags) {
     estimated_time: task.estimated_time || 0,
     actual_time: task.actual_time || 0,
     people: (task.people || []).map(p => typeof p === 'string' ? p : p.name).filter(Boolean),
-    tags: taskTags.map(t => t.name),
+    tags: taskTags,
     created_at: task.created_at || '',
     updated_at: new Date().toISOString(),
   };

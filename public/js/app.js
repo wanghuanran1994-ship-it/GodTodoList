@@ -246,9 +246,24 @@ createApp({
     const appendingNote = ref(false);
 
     // 通用笔记卡片
+    const NOTE_CATEGORIES = [
+      { key: '随手记', icon: '📝', color: '#6b7280' },
+      { key: '命令', icon: '💻', color: '#2563eb' },
+      { key: 'Patch', icon: '🔧', color: '#ea580c' },
+      { key: 'Idea', icon: '💡', color: '#eab308' },
+      { key: '手里剑', icon: '⚡', color: '#7c3aed' },
+    ];
     const noteCards = ref([]);
     const newCardText = ref('');
+    const newCardCategory = ref('随手记');
+    const filterNoteCategory = ref(null);
     const newItemTexts = reactive({});
+    const editingItemId = ref(null);
+
+    const filteredNoteCards = computed(() => {
+      if (!filterNoteCategory.value) return noteCards.value;
+      return noteCards.value.filter(c => (c.category || '随手记') === filterNoteCategory.value);
+    });
 
     // 回顾
     const reviewType = ref('daily');
@@ -277,10 +292,10 @@ createApp({
 
     // 周数 & 剩余天数
     function getISOWeek(d) {
-      const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-      const dayNum = date.getUTCDay() || 7;
-      date.setUTCDate(date.getUTCDate() + 4 - dayNum);
-      const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+      const date = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const dayNum = date.getDay() || 7;
+      date.setDate(date.getDate() + 4 - dayNum);
+      const yearStart = new Date(date.getFullYear(), 0, 1);
       return Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
     }
     function getTotalWeeks(year) {
@@ -301,6 +316,7 @@ createApp({
     const calendarYear = ref(now.getFullYear());
     const calendarMonth = ref(now.getMonth() + 1);
     const calendarViewMode = ref('month'); // 'month' | 'week'
+    const calendarTab = ref('calendar'); // 'calendar' | 'gantt'
 
     function calendarPrevMonth() {
       if (calendarMonth.value <= 1) { calendarMonth.value = 12; calendarYear.value--; }
@@ -412,12 +428,15 @@ createApp({
 
     // ==================== 视图切换 ====================
     function switchView(view) {
+      if (view === 'gantt') view = 'calendar';
       currentView.value = view;
       if (view !== 'kanban') closeDetail();
       if (view === 'goals') loadGoalStats();
       if (view === 'dashboard') { loadReview(); loadReports(); }
       if (view === 'notes') loadNoteCards();
-      if (view === 'reports') loadReportMeetings();
+      if (view === 'reports') view = 'routines';
+      if (view === 'routines') loadReportMeetings();
+      if (view === 'graph') { nextTick(() => initGraph()); }
       expandedProgress.value = {};
     }
 
@@ -564,68 +583,926 @@ createApp({
       calendarMonth.value = monday.getMonth() + 1;
     }
 
-    // ==================== 时间轴 ====================
-    const timelineGroups = computed(() => {
+    // ==================== 甘特图 ====================
+    const ganttRows = ref(null);
+    const ganttScaleBody = ref(null);
+    function syncGanttScroll(source, target) {
+      if (!source || !target) return;
+      target.scrollLeft = source.scrollLeft;
+    }
+
+    const ganttData = computed(() => {
       const today = new Date();
-      const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
-      const tomorrow = new Date(today);
-      tomorrow.setDate(today.getDate() + 1);
-      const tomorrowStr = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth()+1).padStart(2,'0')}-${String(tomorrow.getDate()).padStart(2,'0')}`;
-      // 本周结束（周日）
-      const weekEnd = new Date(today);
-      weekEnd.setDate(today.getDate() + (7 - (today.getDay() || 7)));
-      const weekEndStr = `${weekEnd.getFullYear()}-${String(weekEnd.getMonth()+1).padStart(2,'0')}-${String(weekEnd.getDate()).padStart(2,'0')}`;
-      // 本月结束
-      const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-      const monthEndStr = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth()+1).padStart(2,'0')}-${String(monthEnd.getDate()).padStart(2,'0')}`;
+      today.setHours(0, 0, 0, 0);
+      const todayTs = today.getTime();
+      // 筛选有截止日期的活跃任务
+      const active = tasks.value.filter(t => t.due_date && t.status !== 'done');
+      if (!active.length) return null;
+      // 找出最早和最晚日期
+      let minDate = todayStr(), maxDate = todayStr();
+      for (const t of active) {
+        const s = t.created_at ? t.created_at.slice(0, 10) : todayStr();
+        if (s < minDate) minDate = s;
+        if (t.due_date < minDate) minDate = t.due_date;
+        if (t.due_date > maxDate) maxDate = t.due_date;
+      }
+      // 对齐到周一，末尾对齐到周日
+      const minD = new Date(minDate);
+      minD.setDate(minD.getDate() - (minD.getDay() || 7) + 1);
+      const maxD = new Date(maxDate);
+      maxD.setDate(maxD.getDate() + (7 - (maxD.getDay() || 7)));
+      const totalDays = Math.max(14, Math.ceil((maxD - minD) / 86400000) + 1);
+      const startTs = minD.getTime();
+      const endTs = startTs + totalDays * 86400000;
+      const totalMs = totalDays * 86400000;
+      // 生成天列表 + 月分组
+      const days = [];
+      const months = [];
+      let curMonth = -1;
+      for (let i = 0; i < totalDays; i++) {
+        const d = new Date(startTs + i * 86400000);
+        const m = d.getMonth() + 1;
+        const dayNum = d.getDate();
+        const isToday = d.getTime() === todayTs;
+        const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+        days.push({ label: dayNum, isToday, isWeekend, month: m });
+        if (m !== curMonth) {
+          curMonth = m;
+          months.push({ label: m + '月', startIdx: i, count: 0 });
+        }
+        months[months.length - 1].count++;
+      }
+      // 汇总所有任务每天投入的时间（分钟）
+      let globalMaxDaily = 0;
+      const taskMaps = []; // [{dailyMap, task}]
+      for (const t of active) {
+        const dm = {};
+        if (t.time_logs) {
+          for (const log of t.time_logs) {
+            const dateStr = log.logged_at ? log.logged_at.slice(0, 10) : '';
+            if (dateStr) {
+              dm[dateStr] = (dm[dateStr] || 0) + (log.duration || 0);
+            }
+          }
+        }
+        for (const v of Object.values(dm)) {
+          if (v > globalMaxDaily) globalMaxDaily = v;
+        }
+        taskMaps.push({ dm, task: t });
+      }
+      if (globalMaxDaily <= 0) globalMaxDaily = 60;
 
-      const groups = [
-        { label: '今天', isToday: true, dateRange: todayStr, items: [] },
-        { label: '明天', isToday: false, dateRange: tomorrowStr, items: [] },
-        { label: '本周', isToday: false, dateRange: todayStr + ' ~ ' + weekEndStr, items: [] },
-        { label: '本月', isToday: false, dateRange: todayStr + ' ~ ' + monthEndStr, items: [] },
-        { label: '更晚', isToday: false, dateRange: monthEndStr + ' 之后', items: [] }
-      ];
-
-      const allItems = [];
-
-      // 未归档的任务（有截止日期）
-      for (const t of tasks.value) {
-        if (!t.due_date || t.status === 'done') continue;
-        allItems.push({
-          type: 'task', id: t.id, title: t.title, date: t.due_date, status: t.status,
-          goalName: t.goal_name || '', _key: 't' + t.id
+      const dayPct = 100 / totalDays;
+      // 构建gantt任务对象（不修改原task，避免触发响应式循环）
+      const ganttTasks = [];
+      for (const { dm, task: t } of taskMaps) {
+        const s = t.created_at ? new Date(t.created_at.slice(0, 10)).getTime() : todayTs;
+        const e = new Date(t.due_date).getTime();
+        const barLeft = Math.max(0, ((s - startTs) / totalMs) * 100);
+        const barWidth = Math.max(dayPct, ((e - Math.max(s, startTs)) / totalMs) * 100);
+        const segs = [];
+        const startDay = Math.floor((Math.max(s, startTs) - startTs) / 86400000);
+        const endDay = Math.min(totalDays - 1, Math.floor((e - startTs) / 86400000));
+        for (let di = startDay; di <= endDay; di++) {
+          const d = new Date(startTs + di * 86400000);
+          const ds = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+          const mins = dm[ds] || 0;
+          const alpha = mins > 0 ? (0.2 + 0.8 * (mins / globalMaxDaily)) : 0.08;
+          segs.push({ left: di * dayPct, width: dayPct, alpha });
+        }
+        ganttTasks.push({
+          id: t.id, title: t.title, due_date: t.due_date, goal_id: t.goal_id,
+          barLeft, barWidth, segments: segs, dateLabel: t.due_date
         });
       }
-
-      // 未归档的目标（有目标日期）
-      for (const g of goals.value) {
-        if (!g.target_date || g.archived) continue;
-        allItems.push({
-          type: 'goal', id: g.id, title: g.name, date: g.target_date, status: 'active',
-          goalName: '', _key: 'g' + g.id
-        });
+      // 计算今天线的百分比
+      const todayPercent = ((todayTs - startTs) / totalMs) * 100;
+      // 按goal分组
+      const goalMap = new Map();
+      for (const gt of ganttTasks) {
+        const gid = gt.goal_id || '_none';
+        if (!goalMap.has(gid)) {
+          const g = goals.value.find(gg => gg.id === gid);
+          goalMap.set(gid, {
+            goalId: gid,
+            goalName: g ? g.name : '其他',
+            color: g ? g.color : '#9ca3af',
+            tasks: []
+          });
+        }
+        goalMap.get(gid).tasks.push(gt);
       }
-
-      // 按日期排序
-      allItems.sort((a, b) => a.date.localeCompare(b.date));
-
-      // 分组
-      for (const item of allItems) {
-        if (item.date === todayStr) groups[0].items.push(item);
-        else if (item.date === tomorrowStr) groups[1].items.push(item);
-        else if (item.date <= weekEndStr) groups[2].items.push(item);
-        else if (item.date <= monthEndStr) groups[3].items.push(item);
-        else groups[4].items.push(item);
+      for (const g of goalMap.values()) {
+        g.tasks.sort((a, b) => a.due_date.localeCompare(b.due_date));
       }
-
-      return groups.filter(g => g.items.length > 0);
+      const groups = [...goalMap.values()].sort((a, b) => {
+        if (a.goalId === '_none') return 1;
+        if (b.goalId === '_none') return -1;
+        return 0;
+      });
+      const COL_W = 32;
+      const trackWidth = totalDays * COL_W;
+      return { days, months, groups, todayPercent, totalDays, trackWidth };
     });
+    function todayStr() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
 
     function toggleGoalFilter(goalId) {
       filterGoalId.value = filterGoalId.value === goalId ? null : goalId;
       currentView.value = 'kanban';
       loadTasks();
+    }
+
+    // ==================== 关联图谱 ====================
+    const graphTooltip = ref(null);
+    const graphCanvas = ref(null);
+    const graphCanvasWrap = ref(null);
+    const graphZoom = ref(1);
+    let gNodes = [], gEdges = [], gAnimId = null, gCtx = null;
+    let gScale = 1, gOffX = 0, gOffY = 0, gDPR = 1;
+    let gDragging = null, gHovered = null, gDragOX = 0, gDragOY = 0;
+    let gFocused = null, gClickNode = null, gClickTimer = null, gDragMoved = false;
+    let gParticles = [], gTime = 0;
+
+    function buildGraph() {
+      const activeGoals = goals.value.filter(g => !g.archived);
+      const activeTasks = tasks.value.filter(t => t.status !== 'done');
+      if (!activeGoals.length && !activeTasks.length) { gNodes = []; gEdges = []; return; }
+      // 收集每个goal的tag和人员
+      const goalTags = {}, goalPeople = {};
+      for (const g of activeGoals) {
+        const ts = new Set(), ps = new Set();
+        for (const t of tasks.value) {
+          if (t.goal_id === g.id) {
+            if (t.tags) for (const tag of t.tags) ts.add(tag.name || tag.id);
+            if (t.people) for (const p of t.people) ps.add(typeof p === 'string' ? p : p.name);
+          }
+        }
+        goalTags[g.id] = ts;
+        goalPeople[g.id] = ps;
+      }
+      // 目标节点
+      const cx = (window.innerWidth - 300) / 2;
+      const cy = window.innerHeight / 2 - 80;
+      gNodes = activeGoals.map((g, i) => {
+        const angle = (2 * Math.PI * i) / Math.max(activeGoals.length, 1);
+        const r = Math.min(480, Math.max(activeGoals.length, 1) * 100);
+        const myTasks = tasks.value.filter(t => t.goal_id === g.id);
+        const total = myTasks.length;
+        const done = myTasks.filter(t => t.status === 'done').length;
+        return {
+          id: g.id, label: g.name, color: g.color, type: 'goal',
+          radius: 20 + Math.min(total * 2.5, 26),
+          x: cx + Math.cos(angle) * r + (Math.random() - 0.5) * 40,
+          y: cy + Math.sin(angle) * r + (Math.random() - 0.5) * 40,
+          vx: 0, vy: 0, total, done,
+          tags: [...goalTags[g.id]], people: [...goalPeople[g.id]]
+        };
+      });
+      // 任务节点 — 围绕父目标分布
+      gEdges = [];
+      const goalMap = {};
+      for (const g of gNodes) { goalMap[g.id] = g; }
+      for (const goal of gNodes) {
+        const myTasks = activeTasks.filter(t => t.goal_id === goal.id);
+        for (let i = 0; i < myTasks.length; i++) {
+          const t = myTasks[i];
+          const angle = (2 * Math.PI * i) / Math.max(myTasks.length, 1);
+          const dist = goal.radius + 60 + Math.random() * 50;
+          const taskNode = {
+            id: t.id, label: t.title, type: 'task',
+            parentId: goal.id,
+            color: goal.color,
+            radius: 9 + Math.random() * 6,
+            x: goal.x + Math.cos(angle) * dist,
+            y: goal.y + Math.sin(angle) * dist,
+            vx: 0, vy: 0,
+            status: t.status, done: t.status === 'done',
+            tags: t.tags ? t.tags.map(tg => tg.name || tg.id) : [],
+            people: t.people ? t.people.map(p => typeof p === 'string' ? p : p.name) : []
+          };
+          gNodes.push(taskNode);
+          gEdges.push({ source: taskNode, target: goal, weight: 1, type: 'parent-child' });
+        }
+      }
+      // 无目标的任务
+      const orphans = activeTasks.filter(t => !t.goal_id || !goalMap[t.goal_id]);
+      for (let i = 0; i < orphans.length; i++) {
+        const t = orphans[i];
+        const taskNode = {
+          id: t.id, label: t.title, type: 'task',
+          parentId: null,
+          color: '#94a3b8',
+          radius: 5.5 + Math.random() * 4,
+          x: cx + (Math.random() - 0.5) * 300,
+          y: cy + 200 + (Math.random() - 0.5) * 60,
+          vx: 0, vy: 0,
+          status: t.status, done: t.status === 'done',
+          tags: t.tags ? t.tags.map(tg => tg.name || tg.id) : [],
+          people: t.people ? t.people.map(p => typeof p === 'string' ? p : p.name) : []
+        };
+        gNodes.push(taskNode);
+      }
+      // 目标-目标边：tag共享 + 人员共享
+      for (let i = 0; i < activeGoals.length; i++) {
+        for (let j = i + 1; j < activeGoals.length; j++) {
+          const a = gNodes[i], b = gNodes[j];
+          if (a.type !== 'goal' || b.type !== 'goal') continue;
+          const sharedTags = a.tags.filter(t => b.tags.includes(t));
+          const sharedPeople = a.people.filter(p => b.people.includes(p));
+          const weight = sharedTags.length + sharedPeople.length;
+          if (weight) {
+            gEdges.push({
+              source: a, target: b, weight,
+              tags: sharedTags, people: sharedPeople,
+              type: sharedTags.length && sharedPeople.length ? 'both'
+                : sharedTags.length ? 'tag' : 'people'
+            });
+          }
+        }
+      }
+      // 粒子背景
+      gParticles = [];
+      const pw = graphCanvas.value ? graphCanvas.value.width / gDPR : window.innerWidth;
+      const ph = graphCanvas.value ? graphCanvas.value.height / gDPR : window.innerHeight;
+      for (let i = 0; i < 60; i++) {
+        gParticles.push({
+          x: Math.random() * pw,
+          y: Math.random() * ph,
+          r: Math.random() * 1.5 + 0.5,
+          vx: (Math.random() - 0.5) * 0.3,
+          vy: (Math.random() - 0.5) * 0.3,
+          alpha: Math.random() * 0.4 + 0.1
+        });
+      }
+    }
+
+    function gIsDark() { return document.body.classList.contains('dark'); }
+
+    function graphSimulate() {
+      const goals = gNodes.filter(n => n.type === 'goal');
+      const tasks = gNodes.filter(n => n.type === 'task');
+      const goalMap = {};
+      for (const g of goals) { goalMap[g.id] = g; }
+      const cx = (window.innerWidth - 300) / 2, cy = window.innerHeight / 2 - 80;
+      // 目标→中心引力
+      for (const n of goals) {
+        n.vx += (cx - n.x) * 0.002;
+        n.vy += (cy - n.y) * 0.002;
+      }
+      // 目标↔目标 互斥
+      for (const n of goals) {
+        for (const m of goals) {
+          if (n === m) continue;
+          let dx = n.x - m.x, dy = n.y - m.y;
+          const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+          const force = 4000 / (dist * dist);
+          n.vx += (dx / dist) * force;
+          n.vy += (dy / dist) * force;
+        }
+      }
+      // 目标-目标 弹簧边
+      for (const e of gEdges) {
+        if (e.type === 'parent-child') continue;
+        const dx = e.target.x - e.source.x, dy = e.target.y - e.source.y;
+        const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+        const force = dist * 0.006 * e.weight;
+        const fx = (dx / dist) * force, fy = (dy / dist) * force;
+        e.source.vx += fx; e.source.vy += fy;
+        e.target.vx -= fx; e.target.vy -= fy;
+      }
+      // 目标阻尼
+      for (const n of goals) {
+        if (gDragging !== n) { n.vx *= 0.82; n.vy *= 0.82; }
+        n.x += n.vx; n.y += n.vy;
+      }
+      // 任务→父目标 强吸引
+      for (const n of tasks) {
+        const parent = goalMap[n.parentId];
+        if (parent) {
+          const dx = parent.x - n.x, dy = parent.y - n.y;
+          const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+          const targetDist = parent.radius + 70 + n.radius;
+          const force = (dist - targetDist) * 0.02;
+          n.vx += (dx / dist) * force;
+          n.vy += (dy / dist) * force;
+        }
+      }
+      // 任务↔任务 互斥（同父目标）
+      for (const n of tasks) {
+        for (const m of tasks) {
+          if (n === m || n.parentId !== m.parentId) continue;
+          let dx = n.x - m.x, dy = n.y - m.y;
+          const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+          const force = 150 / (dist * dist);
+          n.vx += (dx / dist) * force;
+          n.vy += (dy / dist) * force;
+        }
+      }
+      // 任务↔目标 互斥（防止任务钻进目标里）
+      for (const t of tasks) {
+        for (const g of goals) {
+          if (t.parentId === g.id) continue;
+          let dx = t.x - g.x, dy = t.y - g.y;
+          const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+          const minDist = g.radius + t.radius + 10;
+          if (dist < minDist) {
+            const force = (minDist - dist) * 0.1;
+            t.vx += (dx / dist) * force;
+            t.vy += (dy / dist) * force;
+          }
+        }
+      }
+      // 任务阻尼
+      for (const n of tasks) {
+        if (gDragging !== n) { n.vx *= 0.78; n.vy *= 0.78; }
+        n.x += n.vx; n.y += n.vy;
+      }
+    }
+
+    function graphRender() {
+      if (!gCtx) return;
+      const canvas = gCtx.canvas;
+      const w = canvas.width / gDPR, h = canvas.height / gDPR;
+      const dark = gIsDark();
+      const bg = dark ? '#14141e' : '#f8f9fb';
+      gCtx.setTransform(gDPR, 0, 0, gDPR, 0, 0);
+      gCtx.clearRect(0, 0, w, h);
+      // 背景
+      gCtx.fillStyle = bg;
+      gCtx.fillRect(0, 0, w, h);
+      // 粒子
+      gTime += 0.005;
+      for (const p of gParticles) {
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0) p.x = w; if (p.x > w) p.x = 0;
+        if (p.y < 0) p.y = h; if (p.y > h) p.y = 0;
+        gCtx.beginPath();
+        gCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        gCtx.fillStyle = dark ? `rgba(255,255,255,${p.alpha * 0.5})` : `rgba(124,58,237,${p.alpha * 0.3})`;
+        gCtx.fill();
+      }
+
+      gCtx.save();
+      gCtx.translate(gOffX, gOffY);
+      gCtx.scale(gScale, gScale);
+
+      const goalNodes = gNodes.filter(n => n.type === 'goal');
+      const taskNodes = gNodes.filter(n => n.type === 'task');
+
+      // ---- 目标-目标边 (Bezier曲线) ----
+      for (const e of gEdges) {
+        if (e.type === 'parent-child') continue;
+        const sx = e.source.x, sy = e.source.y, tx = e.target.x, ty = e.target.y;
+        const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+        const dx = tx - sx, dy = ty - sy;
+        const len = Math.sqrt(dx * dx + dy * dy || 1);
+        const perp = len * 0.12;
+        const cpx = mx - (dy / len) * perp * (e.weight % 2 ? 1 : -1);
+        const cpy = my + (dx / len) * perp * (e.weight % 2 ? 1 : -1);
+        gCtx.beginPath();
+        gCtx.moveTo(sx, sy);
+        gCtx.quadraticCurveTo(cpx, cpy, tx, ty);
+        const alpha = 0.10 + e.weight * 0.06;
+        gCtx.strokeStyle = dark ? `rgba(255,255,255,${alpha})` : `rgba(124,58,237,${alpha})`;
+        gCtx.lineWidth = 0.7 + e.weight * 0.6;
+        gCtx.stroke();
+        // 边标签
+        const midX = (sx + cpx + tx) / 3, midY = (sy + cpy + ty) / 3;
+        gCtx.fillStyle = dark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.3)';
+        gCtx.font = '10px -apple-system, "PingFang SC", sans-serif';
+        gCtx.textAlign = 'center';
+        gCtx.fillText(e.weight + '个关联', midX, midY - 2);
+      }
+
+      // ---- 任务-父目标边 ----
+      for (const e of gEdges) {
+        if (e.type !== 'parent-child') continue;
+        const sx = e.source.x, sy = e.source.y, tx = e.target.x, ty = e.target.y;
+        gCtx.beginPath();
+        gCtx.setLineDash([3, 5]);
+        gCtx.moveTo(sx, sy);
+        gCtx.lineTo(tx, ty);
+        const edgeAlpha = (gHovered && (gHovered === e.source || gHovered === e.target)) ? 0.35 : 0.12;
+        gCtx.strokeStyle = e.source.color + (edgeAlpha > 0.3 ? '88' : '44');
+        gCtx.lineWidth = (gHovered && (gHovered === e.source || gHovered === e.target)) ? 1.2 : 0.5;
+        gCtx.stroke();
+        gCtx.setLineDash([]);
+      }
+
+      // hover 高亮目标-目标边
+      if (gHovered && gHovered.type === 'goal') {
+        for (const e of gEdges) {
+          if (e.type === 'parent-child') continue;
+          if (e.source === gHovered || e.target === gHovered) {
+            const sx = e.source.x, sy = e.source.y, tx = e.target.x, ty = e.target.y;
+            const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+            const dx = tx - sx, dy = ty - sy;
+            const len = Math.sqrt(dx * dx + dy * dy || 1);
+            const perp = len * 0.12;
+            const cpx = mx - (dy / len) * perp * (e.weight % 2 ? 1 : -1);
+            const cpy = my + (dx / len) * perp * (e.weight % 2 ? 1 : -1);
+            gCtx.beginPath();
+            gCtx.moveTo(sx, sy);
+            gCtx.quadraticCurveTo(cpx, cpy, tx, ty);
+            gCtx.strokeStyle = gHovered.color + 'aa';
+            gCtx.lineWidth = 2.5 + e.weight;
+            gCtx.shadowColor = gHovered.color + '66';
+            gCtx.shadowBlur = 8;
+            gCtx.stroke();
+            gCtx.shadowBlur = 0;
+          }
+        }
+      }
+
+      // ---- 目标节点 ----
+      for (const n of goalNodes) {
+        const r = gHovered === n ? n.radius + 5 : n.radius;
+        // 光晕
+        const outerGlow = gCtx.createRadialGradient(n.x, n.y, r * 0.4, n.x, n.y, r * 2.2);
+        outerGlow.addColorStop(0, n.color + '30');
+        outerGlow.addColorStop(1, 'transparent');
+        gCtx.beginPath();
+        gCtx.arc(n.x, n.y, r * 2.2, 0, Math.PI * 2);
+        gCtx.fillStyle = outerGlow;
+        gCtx.fill();
+        // 完成环
+        if (n.total > 0 && n.done > 0) {
+          const ratio = n.done / n.total;
+          gCtx.beginPath();
+          gCtx.arc(n.x, n.y, r + 3, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio);
+          gCtx.strokeStyle = '#22c55e';
+          gCtx.lineWidth = 2.5;
+          gCtx.stroke();
+          gCtx.beginPath();
+          gCtx.arc(n.x, n.y, r + 3, -Math.PI / 2 + Math.PI * 2 * ratio, -Math.PI / 2 + Math.PI * 2);
+          gCtx.strokeStyle = dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+          gCtx.lineWidth = 2.5;
+          gCtx.stroke();
+        }
+        // 阴影
+        gCtx.shadowColor = dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.2)';
+        gCtx.shadowBlur = 16;
+        // 主体渐变
+        const grad = gCtx.createRadialGradient(n.x - r * 0.25, n.y - r * 0.3, r * 0.05, n.x, n.y, r);
+        grad.addColorStop(0, '#ffffff');
+        grad.addColorStop(0.35, gHovered === n ? lightenColor(n.color, 0.2) : n.color);
+        grad.addColorStop(1, n.color + 'bb');
+        gCtx.beginPath();
+        gCtx.arc(n.x, n.y, r, 0, Math.PI * 2);
+        gCtx.fillStyle = grad;
+        gCtx.fill();
+        gCtx.shadowBlur = 0;
+        // 内环高光
+        gCtx.beginPath();
+        gCtx.arc(n.x, n.y, r - 3, 0, Math.PI * 2);
+        gCtx.strokeStyle = 'rgba(255,255,255,0.15)';
+        gCtx.lineWidth = 1;
+        gCtx.stroke();
+      }
+
+      // ---- 目标标签 ----
+      for (const n of goalNodes) {
+        const r = gHovered === n ? n.radius + 5 : n.radius;
+        const labelW = n.label.length * 7 + 16;
+        const labelH = 20, labelY = n.y - r - 16;
+        gCtx.fillStyle = dark ? 'rgba(20,20,30,0.85)' : 'rgba(255,255,255,0.9)';
+        gCtx.beginPath();
+        if (gCtx.roundRect) {
+          gCtx.roundRect(n.x - labelW / 2, labelY - labelH / 2, labelW, labelH, 6);
+        } else {
+          gCtx.rect(n.x - labelW / 2, labelY - labelH / 2, labelW, labelH);
+        }
+        gCtx.fill();
+        gCtx.fillStyle = dark ? '#e2e8f0' : '#1e1e2e';
+        gCtx.font = '600 12px -apple-system, "PingFang SC", sans-serif';
+        gCtx.textAlign = 'center';
+        gCtx.textBaseline = 'middle';
+        gCtx.fillText(n.label, n.x, labelY);
+        // 任务数在中心
+        gCtx.fillStyle = '#fff';
+        gCtx.font = `bold ${Math.max(10, r * 0.45)}px -apple-system, "PingFang SC", sans-serif`;
+        gCtx.fillText(n.total, n.x, n.y + 1);
+      }
+
+      // ---- 任务节点（普通，非焦点）----
+      const focusedTask = gFocused && gFocused.type === 'task' ? gFocused : null;
+      for (const n of taskNodes) {
+        if (n === focusedTask) continue; // 焦点任务最后画
+        const isFocused = n === gFocused;
+        const isHovered = gHovered === n;
+        const parentHovered = gHovered && gHovered.type === 'goal' && n.parentId === gHovered.id;
+        const r = isHovered ? n.radius + 3 : parentHovered ? n.radius + 1.5 : n.radius;
+        const alpha = isHovered ? 1 : parentHovered ? 0.85 : 0.6;
+        // 光晕
+        if (isHovered || parentHovered) {
+          gCtx.beginPath();
+          gCtx.arc(n.x, n.y, r * 2.5, 0, Math.PI * 2);
+          gCtx.fillStyle = n.color + '20';
+          gCtx.fill();
+        }
+        // 主体 — 浅底+原色描边，与目标的实心渐变形成质感对比
+        gCtx.beginPath();
+        gCtx.arc(n.x, n.y, r, 0, Math.PI * 2);
+        gCtx.fillStyle = n.done ? '#94a3b8' : muteColor(n.color);
+        gCtx.globalAlpha = alpha;
+        gCtx.fill();
+        gCtx.globalAlpha = 1;
+        // 描边（原色）
+        gCtx.beginPath();
+        gCtx.arc(n.x, n.y, r, 0, Math.PI * 2);
+        gCtx.strokeStyle = (n.done ? '#94a3b8' : n.color) + (isHovered || parentHovered ? 'aa' : '44');
+        gCtx.lineWidth = isHovered ? 1.8 : 1;
+        gCtx.stroke();
+        // 完成标记
+        if (n.done) {
+          gCtx.strokeStyle = '#22c55e';
+          gCtx.lineWidth = 1.2;
+          gCtx.beginPath();
+          gCtx.arc(n.x, n.y, r + 1.5, 0, Math.PI * 2);
+          gCtx.stroke();
+        }
+        // 常驻任务名
+        const showLabel = isHovered || parentHovered;
+        const labelMax = showLabel ? 25 : 12;
+        const label = n.label.length > labelMax ? n.label.slice(0, labelMax) + '..' : n.label;
+        // 中文字符宽度约为拉丁的2倍，粗略估算
+        const cjkCount = (label.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+        const latinCount = label.length - cjkCount;
+        const charW = showLabel ? 7 : 6;
+        const lw = (cjkCount * charW + latinCount * charW * 0.55) + 10;
+        const lh = showLabel ? 18 : 15, ly = n.y + r + (showLabel ? 8 : 5);
+        const labelAlpha = showLabel ? 0.9 : 0.55;
+        gCtx.fillStyle = dark ? `rgba(20,20,30,${0.7 * labelAlpha})` : `rgba(255,255,255,${0.8 * labelAlpha})`;
+        gCtx.beginPath();
+        if (gCtx.roundRect) {
+          gCtx.roundRect(n.x - lw / 2, ly - lh / 2, lw, lh, 3);
+        } else {
+          gCtx.rect(n.x - lw / 2, ly - lh / 2, lw, lh);
+        }
+        gCtx.fill();
+        gCtx.fillStyle = dark ? `rgba(226,232,240,${0.55 * labelAlpha})` : `rgba(30,30,46,${0.5 * labelAlpha})`;
+        gCtx.font = `${showLabel ? 10 : 8.5}px -apple-system, "PingFang SC", sans-serif`;
+        gCtx.textAlign = 'center';
+        gCtx.textBaseline = 'middle';
+        gCtx.fillText(label, n.x, ly);
+      }
+      // ---- 焦点任务节点（放大，最前）----
+      if (focusedTask) {
+        const n = focusedTask;
+        const r = n.radius + 10;
+        // 强光晕
+        const glow = gCtx.createRadialGradient(n.x, n.y, r * 0.3, n.x, n.y, r * 2.5);
+        glow.addColorStop(0, n.color + '50');
+        glow.addColorStop(1, 'transparent');
+        gCtx.beginPath();
+        gCtx.arc(n.x, n.y, r * 2.5, 0, Math.PI * 2);
+        gCtx.fillStyle = glow;
+        gCtx.fill();
+        // 主体（更大，更亮）
+        gCtx.shadowColor = n.color + '55';
+        gCtx.shadowBlur = 18;
+        gCtx.beginPath();
+        gCtx.arc(n.x, n.y, r, 0, Math.PI * 2);
+        gCtx.fillStyle = n.done ? '#94a3b8' : n.color;
+        gCtx.fill();
+        gCtx.shadowBlur = 0;
+        // 高光
+        gCtx.beginPath();
+        gCtx.arc(n.x, n.y, r - 3, 0, Math.PI * 2);
+        gCtx.strokeStyle = 'rgba(255,255,255,0.25)';
+        gCtx.lineWidth = 1.5;
+        gCtx.stroke();
+        // 全名标签（不截断）
+        const label = n.label;
+        const cjkC = (label.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+        const latinC = label.length - cjkC;
+        const lw = (cjkC * 7.5 + latinC * 4.2) + 16;
+        const lh = 20, ly = n.y + r + 10;
+        gCtx.fillStyle = dark ? 'rgba(20,20,30,0.92)' : 'rgba(255,255,255,0.95)';
+        gCtx.beginPath();
+        if (gCtx.roundRect) {
+          gCtx.roundRect(n.x - lw / 2, ly - lh / 2, lw, lh, 5);
+        } else {
+          gCtx.rect(n.x - lw / 2, ly - lh / 2, lw, lh);
+        }
+        gCtx.fill();
+        gCtx.fillStyle = dark ? '#f1f5f9' : '#1e1e2e';
+        gCtx.font = '600 12px -apple-system, "PingFang SC", sans-serif';
+        gCtx.textAlign = 'center';
+        gCtx.textBaseline = 'middle';
+        gCtx.fillText(label, n.x, ly);
+      }
+      gCtx.textBaseline = 'alphabetic';
+
+      // ---- 焦点节点高亮 ----
+      if (gFocused && !gDragging) {
+        const n = gFocused;
+        const r = n.type === 'goal' ? n.radius + 8 : n.radius + 6;
+        // 呼吸环
+        const breathe = 1 + Math.sin(gTime * 3) * 0.15;
+        gCtx.beginPath();
+        gCtx.arc(n.x, n.y, r * breathe, 0, Math.PI * 2);
+        gCtx.strokeStyle = n.type === 'goal' ? n.color : muteColor(n.color);
+        gCtx.lineWidth = 2.5;
+        gCtx.shadowColor = n.type === 'goal' ? n.color + '66' : muteColor(n.color) + '66';
+        gCtx.shadowBlur = 12;
+        gCtx.stroke();
+        gCtx.shadowBlur = 0;
+        // 高亮关联边
+        const relatedEdges = gEdges.filter(e => e.source === n || e.target === n);
+        for (const e of relatedEdges) {
+          gCtx.beginPath();
+          gCtx.moveTo(e.source.x, e.source.y);
+          if (e.type !== 'parent-child') {
+            const mx = (e.source.x + e.target.x) / 2, my = (e.source.y + e.target.y) / 2;
+            const dx = e.target.x - e.source.x, dy = e.target.y - e.source.y;
+            const len = Math.sqrt(dx * dx + dy * dy || 1);
+            const perp = len * 0.12;
+            const cpx = mx - (dy / len) * perp * (e.weight % 2 ? 1 : -1);
+            const cpy = my + (dx / len) * perp * (e.weight % 2 ? 1 : -1);
+            gCtx.quadraticCurveTo(cpx, cpy, e.target.x, e.target.y);
+          } else {
+            gCtx.lineTo(e.target.x, e.target.y);
+          }
+          gCtx.strokeStyle = n.type === 'goal' ? n.color + '88' : muteColor(n.color) + '88';
+          gCtx.lineWidth = e.type === 'parent-child' ? 1.5 : 2.2;
+          gCtx.stroke();
+        }
+        // 关联节点微亮
+        const relatedIds = new Set();
+        for (const e of relatedEdges) {
+          if (e.source !== n) relatedIds.add(e.source);
+          if (e.target !== n) relatedIds.add(e.target);
+        }
+        for (const rn of relatedIds) {
+          gCtx.beginPath();
+          gCtx.arc(rn.x, rn.y, rn.radius + 5, 0, Math.PI * 2);
+          gCtx.fillStyle = (rn.type === 'goal' ? (rn.color || '#94a3b8') : muteColor(rn.color || '#94a3b8')) + '18';
+          gCtx.fill();
+        }
+        // 关联节点简略标签（1-2层）
+        const hop1 = new Set(), hop2 = new Set();
+        for (const e of gEdges) {
+          if (e.source === n && e.target !== n) hop1.add(e.target);
+          if (e.target === n && e.source !== n) hop1.add(e.source);
+        }
+        for (const h1 of hop1) {
+          for (const e of gEdges) {
+            if (e.source === h1 && e.target !== n && !hop1.has(e.target)) hop2.add(e.target);
+            if (e.target === h1 && e.source !== n && !hop1.has(e.source)) hop2.add(e.source);
+          }
+        }
+        const dark2 = gIsDark();
+        for (const [set, maxLen, fontSize, yOff] of [[hop2, 5, 9, 18], [hop1, 8, 10, 16]]) {
+          for (const node of set) {
+            const txt = node.label.length > maxLen ? node.label.slice(0, maxLen) + '..' : node.label;
+            const lw = txt.length * fontSize * 0.55 + 8;
+            const ly = node.y + node.radius + yOff;
+            gCtx.fillStyle = dark2 ? 'rgba(20,20,30,0.7)' : 'rgba(255,255,255,0.75)';
+            gCtx.beginPath();
+            if (gCtx.roundRect) {
+              gCtx.roundRect(node.x - lw / 2, ly - 8, lw, 14, 3);
+            } else {
+              gCtx.rect(node.x - lw / 2, ly - 8, lw, 14);
+            }
+            gCtx.fill();
+            gCtx.fillStyle = dark2 ? 'rgba(226,232,240,0.7)' : 'rgba(30,30,46,0.65)';
+            gCtx.font = `${fontSize}px -apple-system, "PingFang SC", sans-serif`;
+            gCtx.textAlign = 'center';
+            gCtx.textBaseline = 'middle';
+            gCtx.fillText(txt, node.x, ly - 1);
+          }
+        }
+      }
+
+      gCtx.restore();
+    }
+
+    function lightenColor(hex, amount) {
+      const num = parseInt(hex.replace('#', ''), 16);
+      const r = Math.min(255, (num >> 16) + 40);
+      const g = Math.min(255, ((num >> 8) & 0x00FF) + 40);
+      const b = Math.min(255, (num & 0x0000FF) + 40);
+      return `rgb(${r},${g},${b})`;
+    }
+    // 与父目标同色系但更柔和（混白/黑降低饱和度，用于任务节点）
+    function muteColor(hex) {
+      const num = parseInt(hex.replace('#', ''), 16);
+      const r = (num >> 16), g = ((num >> 8) & 0xFF), b = (num & 0xFF);
+      const mix = gIsDark() ? [30, 34, 45] : [255, 255, 255];
+      // 30% 目标色 + 70% 背景色 → 明显比目标浅
+      const mr = Math.round(r * 0.3 + mix[0] * 0.7);
+      const mg = Math.round(g * 0.3 + mix[1] * 0.7);
+      const mb = Math.round(b * 0.3 + mix[2] * 0.7);
+      return `rgb(${mr},${mg},${mb})`;
+    }
+
+    function graphLoop() {
+      // 焦点节点居中动画
+      if (gFocused && gCtx) {
+        const cw = gCtx.canvas.width / gDPR, ch = gCtx.canvas.height / gDPR;
+        const targetOX = cw / 2 - gFocused.x * gScale;
+        const targetOY = ch / 2 - gFocused.y * gScale;
+        gOffX += (targetOX - gOffX) * 0.08;
+        gOffY += (targetOY - gOffY) * 0.08;
+      }
+      graphSimulate();
+      graphRender();
+      gAnimId = requestAnimationFrame(graphLoop);
+    }
+
+    function initGraph() {
+      if (!graphCanvas.value || !graphCanvasWrap.value) return;
+      const wrap = graphCanvasWrap.value;
+      const canvas = graphCanvas.value;
+      gDPR = window.devicePixelRatio || 1;
+      canvas.width = wrap.clientWidth * gDPR;
+      canvas.height = wrap.clientHeight * gDPR;
+      gCtx = canvas.getContext('2d');
+      gScale = 1; gOffX = 0; gOffY = 0; gFocused = null;
+      buildGraph();
+      autoFitGraph();
+      graphZoom.value = gScale;
+      if (gAnimId) cancelAnimationFrame(gAnimId);
+      gAnimId = requestAnimationFrame(graphLoop);
+    }
+
+    function autoFitGraph() {
+      if (!gNodes.length || !gCtx) return;
+      // 计算所有节点的包围盒
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const n of gNodes) {
+        if (n.x - n.radius < minX) minX = n.x - n.radius;
+        if (n.y - n.radius < minY) minY = n.y - n.radius;
+        if (n.x + n.radius > maxX) maxX = n.x + n.radius;
+        if (n.y + n.radius > maxY) maxY = n.y + n.radius;
+      }
+      const bw = maxX - minX, bh = maxY - minY;
+      if (bw <= 0 || bh <= 0) return;
+      const cw = gCtx.canvas.width / gDPR, ch = gCtx.canvas.height / gDPR;
+      // 留 15% 边距，计算合适的缩放比例
+      const scaleX = (cw * 0.85) / bw;
+      const scaleY = (ch * 0.85) / bh;
+      gScale = Math.min(scaleX, scaleY, 2.5); // 最多放大到 2.5x
+      // 居中偏移
+      const midX = (minX + maxX) / 2, midY = (minY + maxY) / 2;
+      gOffX = cw / 2 - midX * gScale;
+      gOffY = ch / 2 - midY * gScale;
+    }
+
+    function graphMouseDown(e) {
+      gDragMoved = false;
+      gDragging = null;
+      if (!gNodes.length) return;
+      const rect = graphCanvas.value.getBoundingClientRect();
+      const mx = (e.clientX - rect.left - gOffX) / gScale;
+      const my = (e.clientY - rect.top - gOffY) / gScale;
+      let best = null, bestDist = Infinity;
+      for (const n of gNodes) {
+        const d = Math.hypot(mx - n.x, my - n.y);
+        if (d < n.radius + 8 && d < bestDist) { best = n; bestDist = d; }
+      }
+      if (best) { gDragging = best; gDragOX = best.x - mx; gDragOY = best.y - my; }
+    }
+    function graphMouseMove(e) {
+      if (!gNodes.length) return;
+      const rect = graphCanvas.value.getBoundingClientRect();
+      const mx = (e.clientX - rect.left - gOffX) / gScale;
+      const my = (e.clientY - rect.top - gOffY) / gScale;
+      if (gDragging) {
+        const dx = (mx + gDragOX) - gDragging.x;
+        const dy = (my + gDragOY) - gDragging.y;
+        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) gDragMoved = true;
+        gDragging.x = mx + gDragOX; gDragging.y = my + gDragOY;
+        gDragging.vx = 0; gDragging.vy = 0;
+        return;
+      }
+      let found = null;
+      // 优先找最小的hover目标（先task后goal，避免大目标吞噬小任务）
+      let bestDist = Infinity;
+      for (const n of gNodes) {
+        const d = Math.hypot(mx - n.x, my - n.y);
+        const hitR = n.radius + 6;
+        if (d < hitR && d < bestDist) { found = n; bestDist = d; }
+      }
+      gHovered = found;
+      if (found) {
+        const rows = [];
+        if (found.type === 'task') {
+          // 任务节点tooltip
+          const parentGoal = gNodes.find(n => n.id === found.parentId);
+          if (parentGoal) rows.push(`🎯 ${parentGoal.label}`);
+          const statusMap = { 'todo': '⏳ 待办', 'in-progress': '🔄 进行中', 'done': '✅ 完成' };
+          rows.push(statusMap[found.status] || found.status);
+          if (found.tags && found.tags.length) rows.push(`🏷️ ${found.tags.join(', ')}`);
+          if (found.people && found.people.length) rows.push(`👤 ${found.people.join(', ')}`);
+        } else {
+          // 目标节点tooltip
+          const connected = [];
+          const tagNames = new Set(), peopleNames = new Set();
+          for (const e of gEdges) {
+            if (e.type === 'parent-child') continue;
+            const other = e.source === found ? e.target : e.target === found ? e.source : null;
+            if (other) {
+              if (e.tags) e.tags.forEach(t => tagNames.add(t));
+              if (e.people) e.people.forEach(p => peopleNames.add(p));
+              connected.push(other.label);
+            }
+          }
+          if (connected.length) rows.push(`🔗 ${connected.join('、')}`);
+          if (tagNames.size) rows.push(`🏷️ 共享标签: ${[...tagNames].join(', ')}`);
+          if (peopleNames.size) rows.push(`👤 共享人员: ${[...peopleNames].join(', ')}`);
+          rows.push(`📊 任务: ${found.total}个 (完成${found.done})`);
+        }
+        graphTooltip.value = { x: e.clientX + 14, y: e.clientY - 10, title: found.label, rows };
+        graphCanvas.value.style.cursor = 'pointer';
+      } else {
+        graphTooltip.value = null;
+        graphCanvas.value.style.cursor = 'grab';
+      }
+    }
+    function graphMouseUp() {
+      const clicked = gDragging;
+      gDragging = null;
+      if (clicked && !gDragMoved) {
+        // 点击了节点（无拖拽）
+        if (gClickNode === clicked) {
+          // 同一节点短时间内第二次 mouseup → 双击，交给 dblclick 处理
+          gClickNode = null;
+          if (gClickTimer) { clearTimeout(gClickTimer); gClickTimer = null; }
+        } else {
+          gClickNode = clicked;
+          if (gClickTimer) clearTimeout(gClickTimer);
+          gClickTimer = setTimeout(() => {
+            gClickTimer = null;
+            if (gClickNode) {
+              gFocused = gFocused === gClickNode ? null : gClickNode;
+              gClickNode = null;
+            }
+          }, 300);
+        }
+      } else if (!clicked) {
+        // 点击空白 → 取消聚焦
+        gFocused = null;
+        gClickNode = null;
+        if (gClickTimer) { clearTimeout(gClickTimer); gClickTimer = null; }
+      }
+    }
+    function zoomAtCenter(newScale) {
+      if (!gCtx) return;
+      const cw = gCtx.canvas.width / gDPR;
+      const ch = gCtx.canvas.height / gDPR;
+      gOffX = cw / 2 - (cw / 2 - gOffX) * (newScale / gScale);
+      gOffY = ch / 2 - (ch / 2 - gOffY) * (newScale / gScale);
+      gScale = newScale;
+    }
+    function graphWheel(e) {
+      e.preventDefault();
+      const newScale = Math.max(0.2, Math.min(3, gScale * (e.deltaY > 0 ? 0.92 : 1.08)));
+      zoomAtCenter(newScale);
+      graphZoom.value = gScale;
+    }
+    function graphZoomTo(v) {
+      const newScale = parseFloat(v) / 100;
+      zoomAtCenter(newScale);
+      graphZoom.value = gScale;
+    }
+    function graphZoomIn() {
+      const newScale = Math.min(3, gScale * 1.15);
+      zoomAtCenter(newScale);
+      graphZoom.value = gScale;
+    }
+    function graphZoomOut() {
+      const newScale = Math.max(0.2, gScale * 0.87);
+      zoomAtCenter(newScale);
+      graphZoom.value = gScale;
+    }
+    function graphClick(e) {
+      // 由 graphMouseUp 处理单双击逻辑，这里仅作兜底
+    }
+    function graphDblClick(e) {
+      if (gClickTimer) { clearTimeout(gClickTimer); gClickTimer = null; }
+      gClickNode = null;
+      if (!gHovered) return;
+      // 双击 → 跳转
+      if (gHovered.type === 'task') {
+        selectTask(gHovered.id);
+        currentView.value = 'kanban';
+      } else {
+        filterGoalId.value = gHovered.id;
+        currentView.value = 'kanban';
+        loadTasks();
+      }
+    }
+    function resizeGraph() {
+      if (!graphCanvas.value || !graphCanvasWrap.value) return;
+      const wrap = graphCanvasWrap.value;
+      gDPR = window.devicePixelRatio || 1;
+      graphCanvas.value.width = wrap.clientWidth * gDPR;
+      graphCanvas.value.height = wrap.clientHeight * gDPR;
     }
 
     function toggleTagFilter(tagId) {
@@ -639,7 +1516,7 @@ createApp({
 
     // ==================== 快速输入解析 ====================
 
-    const DAY_NAMES = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 7, '天': 7 };
+    const DAY_NAMES = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '日': 7, '天': 7 };
 
     function parseQuickInput(raw) {
       let text = raw.trim();
@@ -946,6 +1823,11 @@ createApp({
     }
 
     watch(filterStatus, () => loadTasks());
+    watch([filterGoalId, filterReportOnly], () => {
+      if (currentView.value === 'kanban' || currentView.value === 'dashboard') {
+        loadTasks();
+      }
+    });
 
     // ==================== 任务操作 ====================
     function openQuickAdd() {
@@ -996,13 +1878,19 @@ createApp({
       else newTask.tag_ids.push(tagId);
     }
 
+    let selectTaskRequestId = 0;
     async function selectTask(id) {
       selectedTaskId.value = id;
+      const reqId = ++selectTaskRequestId;
       try {
-        selectedTask.value = await api(`/api/tasks/${id}`);
+        const task = await api(`/api/tasks/${id}`);
+        // 确保没有更新的请求覆盖
+        if (reqId !== selectTaskRequestId) return;
+        selectedTask.value = task;
         loadTaskConversations(id);
         checkAllPathReadmes();
       } catch (e) {
+        if (reqId !== selectTaskRequestId) return;
         selectedTaskId.value = null;
         selectedTask.value = null;
       }
@@ -1238,22 +2126,75 @@ createApp({
     async function createCard() {
       const text = newCardText.value.trim();
       if (!text) return;
-      await api('/api/note-cards', { method: 'POST', body: { content: text } });
+      await api('/api/note-cards', { method: 'POST', body: { content: text, category: newCardCategory.value } });
       newCardText.value = '';
       await loadNoteCards();
     }
     async function renameCard(cardId, title) {
       await api(`/api/note-cards/${cardId}`, { method: 'PUT', body: { title: title?.trim() || '未命名' } });
     }
+    async function updateCardCategory(cardId, category) {
+      await api(`/api/note-cards/${cardId}`, { method: 'PUT', body: { category } });
+      await loadNoteCards();
+    }
     async function deleteCard(cardId) {
       await api(`/api/note-cards/${cardId}`, { method: 'DELETE' });
       await loadNoteCards();
     }
-    async function addItem(cardId) {
+    async function addItem(cardId, parentId) {
       const text = (newItemTexts[cardId] || '').trim();
       if (!text) return;
-      await api(`/api/note-cards/${cardId}/items`, { method: 'POST', body: { content: text } });
+      await api(`/api/note-cards/${cardId}/items`, { method: 'POST', body: { content: text, parent_id: parentId || null } });
       newItemTexts[cardId] = '';
+      await loadNoteCards();
+    }
+    function handleNoteKeydown(e, cardId) {
+      // Tab 键：作为上一条的子项提交
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const text = (newItemTexts[cardId] || '').trim();
+        if (!text) return;
+        const card = noteCards.value.find(c => c.id === cardId);
+        const items = card?.items || [];
+        const lastTopLevel = [...items].reverse().find(it => !it.parent_id);
+        addItem(cardId, lastTopLevel?.id || null);
+      }
+    }
+    // 笔记条目拖拽排序
+    let gDragCardId = null, gDragItemId = null;
+    function onNoteDragStart(e, cardId, itemId) {
+      gDragCardId = cardId; gDragItemId = itemId;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(itemId));
+      e.target.classList.add('dragging');
+    }
+    function onNoteDragOver(e, cardId, itemId) {
+      e.dataTransfer.dropEffect = 'move';
+      e.target.closest('.note-item')?.classList.add('drag-over');
+    }
+    function onNoteDrop(e, cardId, targetId) {
+      e.target.closest('.note-item')?.classList.remove('drag-over');
+      if (!gDragItemId || gDragItemId === targetId || gDragCardId !== cardId) return;
+      reorderNoteItems(cardId, gDragItemId, targetId);
+    }
+    function onNoteDragEnd(e) {
+      gDragCardId = null; gDragItemId = null;
+      document.querySelectorAll('.note-item.dragging, .note-item.drag-over').forEach(el => {
+        el.classList.remove('dragging', 'drag-over');
+      });
+    }
+    async function reorderNoteItems(cardId, fromId, toId) {
+      const card = noteCards.value.find(c => c.id === cardId);
+      if (!card) return;
+      const items = [...card.items];
+      const fromIdx = items.findIndex(it => it.id === fromId);
+      const toIdx = items.findIndex(it => it.id === toId);
+      if (fromIdx < 0 || toIdx < 0) return;
+      // 重新计算 sort_order
+      const moved = items.splice(fromIdx, 1)[0];
+      items.splice(toIdx, 0, moved);
+      const updates = items.map((it, i) => ({ id: it.id, sort_order: i }));
+      await api('/api/note-items/reorder', { method: 'PUT', body: { items: updates } });
       await loadNoteCards();
     }
     async function updateItem(itemId, content) {
@@ -1262,6 +2203,238 @@ createApp({
     async function deleteItem(cardId, itemId) {
       await api(`/api/note-items/${itemId}`, { method: 'DELETE' });
       await loadNoteCards();
+    }
+
+    // 渲染条目内容：自动识别链接和图片
+    function renderItemContent(text) {
+      if (!text) return '<span class="nc-empty">空</span>';
+
+      // 先处理 Markdown 表格：把表格块替换成 HTML table 占位
+      const tablePlaceholders = [];
+      const lines = text.split('\n');
+      let i = 0;
+      let processed = '';
+      while (i < lines.length) {
+        // 检测表格：连续至少3行以 | 开头和结尾
+        const line = lines[i];
+        if (/^\|.+\|$/.test(line.trim()) && i + 1 < lines.length && /^\|[\s\-:|]+\|$/.test(lines[i + 1].trim())) {
+          // 找到表格块
+          const tableLines = [line];
+          i++;
+          tableLines.push(lines[i]); // separator
+          i++;
+          while (i < lines.length && /^\|.+\|$/.test(lines[i].trim())) {
+            tableLines.push(lines[i]);
+            i++;
+          }
+          const tableHtml = markdownTableToHtml(tableLines);
+          tablePlaceholders.push(tableHtml);
+          processed += '\x00TABLE' + (tablePlaceholders.length - 1) + '\x00';
+        } else {
+          processed += (processed ? '\n' : '') + lines[i];
+          i++;
+        }
+      }
+
+      // 检测绝对路径（支持中文、引号包围），替换为占位符
+      const pathPlaceholders = [];
+      processed = processed.replace(/["']?(\/[^\s<>"']{2,})["']?/g, (fullMatch, p) => {
+        // 排除 markdown 图片语法 ![]()
+        if (fullMatch.startsWith('](') || fullMatch.startsWith('![')) return fullMatch;
+        // 排除表格行
+        if (/^\|/.test(p.trim())) return fullMatch;
+        const clean = p.replace(/["']/g, '');
+        pathPlaceholders.push(clean);
+        return '\x00PATH' + (pathPlaceholders.length - 1) + '\x00';
+      });
+
+      // 转义 HTML
+      let html = processed
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      // 图片 ![](url)
+      html = html.replace(/!\[([^\]]*)\]\((\/uploads\/[^\s)]+)\)/g, (_, alt, url) =>
+        `<img src="${url}" alt="${alt}" class="nc-img" loading="lazy" onclick="window.open('${url}')">`);
+
+      // 链接
+      html = html.replace(/(https?:\/\/[^\s<>"']+)/g, (url) => {
+        try { new URL(url); } catch (e) { return url; }
+        return `<a href="${url}" target="_blank" rel="noopener" class="nc-link">${url}</a>`;
+      });
+
+      // 还原表格
+      tablePlaceholders.forEach((tableHtml, idx) => {
+        html = html.replace('\x00TABLE' + idx + '\x00', tableHtml);
+      });
+
+      // 还原路径
+      pathPlaceholders.forEach((p, idx) => {
+        html = html.replace('\x00PATH' + idx + '\x00',
+          `<span class="nc-path" data-path="${p.replace(/"/g, '&quot;')}" title="双击打开: ${p.replace(/"/g, '&quot;')}">${p}</span>`);
+      });
+
+      return html;
+    }
+
+    // 双击路径 → 用系统默认方式打开
+    function handleContentDblClick(event, item) {
+      const pathEl = event.target.closest('.nc-path');
+      if (pathEl) {
+        event.preventDefault();
+        openNotePath(pathEl.dataset.path);
+        return;
+      }
+      startEditItem(item);
+    }
+
+    async function openNotePath(filePath) {
+      try {
+        await api('/api/open-with-editor', {
+          method: 'POST',
+          body: { path: filePath, editor: 'terminal' }
+        });
+      } catch (e) {
+        console.error('打开路径失败:', e);
+      }
+    }
+
+    function markdownTableToHtml(lines) {
+      // lines[0] = header, lines[1] = separator, lines[2..] = body
+      const parseRow = (line) => line.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      const header = parseRow(lines[0]);
+      const body = lines.slice(2).map(parseRow);
+      let table = '<table class="nc-table"><thead><tr>';
+      header.forEach(h => { table += `<th>${h}</th>`; });
+      table += '</tr></thead><tbody>';
+      body.forEach(row => {
+        table += '<tr>';
+        row.forEach(cell => { table += `<td>${cell}</td>`; });
+        table += '</tr>';
+      });
+      table += '</tbody></table>';
+      return table;
+    }
+
+    function copyItemContent(text) {
+      navigator.clipboard.writeText(text || '').then(() => {
+        // 短暂视觉反馈由 CSS :active 处理
+      }).catch(() => {});
+    }
+
+    function startEditItem(item) {
+      editingItemId.value = item.id;
+    }
+    async function saveEditItem(itemId, newContent) {
+      editingItemId.value = null;
+      if (newContent !== undefined) {
+        await updateItem(itemId, newContent.trim() || '');
+        await loadNoteCards();
+      }
+    }
+    function cancelEditItem() {
+      editingItemId.value = null;
+    }
+
+    // 处理粘贴：图片、Excel表格
+    async function handleNotePaste(event, cardId) {
+      const cd = event.clipboardData;
+      if (!cd) return;
+
+      // 1. 检查图片
+      let hasImage = false;
+      if (cd.items) {
+        for (const item of cd.items) {
+          if (item.type.startsWith('image/')) { hasImage = true; break; }
+        }
+      }
+      if (hasImage) {
+        event.preventDefault();
+        for (const item of cd.items) {
+          if (item.type.startsWith('image/')) {
+            const file = item.getAsFile();
+            if (!file) continue;
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+              const res = await fetch('/api/upload', { method: 'POST', body: formData });
+              const data = await res.json();
+              if (data.url) {
+                const current = newItemTexts[cardId] || '';
+                newItemTexts[cardId] = current + (current ? '\n' : '') + `![](${data.url})`;
+              }
+            } catch (e) {
+              console.error('图片上传失败:', e);
+            }
+          }
+        }
+        return;
+      }
+
+      // 2. 检查 Excel/HTML 表格
+      const html = cd.getData('text/html');
+      if (html && /<table/i.test(html)) {
+        event.preventDefault();
+        const md = htmlTableToMarkdown(html);
+        if (md) {
+          const current = newItemTexts[cardId] || '';
+          newItemTexts[cardId] = current + (current ? '\n' : '') + md;
+        }
+        return;
+      }
+
+      // 3. 兜底：Tab 分隔的纯文本（Excel 等）
+      const plain = cd.getData('text/plain');
+      if (plain && plain.includes('\t')) {
+        const lines = plain.split('\n').filter(l => l.trim());
+        if (lines.length >= 2 && lines.every(l => l.includes('\t'))) {
+          event.preventDefault();
+          const rows = lines.map(l => l.split('\t'));
+          const colCount = Math.max(...rows.map(r => r.length));
+          const normalized = rows.map(r => { while (r.length < colCount) r.push(''); return r; });
+          const mdLines = [];
+          mdLines.push('| ' + normalized[0].join(' | ') + ' |');
+          mdLines.push('| ' + normalized[0].map(() => '---').join(' | ') + ' |');
+          for (let i = 1; i < normalized.length; i++) {
+            mdLines.push('| ' + normalized[i].join(' | ') + ' |');
+          }
+          const current = newItemTexts[cardId] || '';
+          newItemTexts[cardId] = current + (current ? '\n' : '') + mdLines.join('\n');
+        }
+      }
+    }
+
+    // HTML table → Markdown table
+    function htmlTableToMarkdown(html) {
+      const match = html.match(/<table[^>]*>([\s\S]*?)<\/table>/i);
+      if (!match) return null;
+      const tbody = match[1];
+      const rows = [];
+      const trRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+      let trMatch;
+      while ((trMatch = trRe.exec(tbody)) !== null) {
+        const cells = [];
+        const tdRe = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
+        let tdMatch;
+        while ((tdMatch = tdRe.exec(trMatch[1])) !== null) {
+          cells.push(tdMatch[1].replace(/<[^>]+>/g, '').trim());
+        }
+        if (cells.length) rows.push(cells);
+      }
+      if (!rows.length) return null;
+      const colCount = Math.max(...rows.map(r => r.length));
+      const normalized = rows.map(r => {
+        while (r.length < colCount) r.push('');
+        return r;
+      });
+      const lines = [];
+      lines.push('| ' + normalized[0].join(' | ') + ' |');
+      lines.push('| ' + normalized[0].map(() => '---').join(' | ') + ' |');
+      for (let i = 1; i < normalized.length; i++) {
+        lines.push('| ' + normalized[i].join(' | ') + ' |');
+      }
+      return lines.join('\n');
     }
 
     async function unlinkFolder() {
@@ -1429,7 +2602,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       }
       showRoutineModal.value = false;
       editingRoutine.value = null;
-      Object.assign(routineForm, { name: '', description: '', goal_id: null, frequency: 'weekly' });
+      Object.assign(routineForm, { name: '', description: '', goal_id: null, frequency: 'weekly', is_report: false, report_meeting: '' });
       await loadRoutines();
     }
 
@@ -2141,6 +3314,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         darkMode.value = true;
         document.body.classList.add('dark');
       }
+      window.addEventListener('resize', () => { if (currentView.value === 'graph') resizeGraph(); });
     });
 
     // ==================== 今日必做 ====================
@@ -2412,9 +3586,12 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       triggerFileInput, handleFileDrop, handleFileSelect,
       deleteAttachment, openAttachment, openFolder, openWithEditor,
       quickNote, appendingNote, appendToReadme,
-      noteCards, newCardText, newItemTexts,
-      loadNoteCards, createCard, renameCard, deleteCard,
-      addItem, updateItem, deleteItem,
+      noteCards, newCardText, newCardCategory, filterNoteCategory, newItemTexts, editingItemId,
+      NOTE_CATEGORIES, filteredNoteCards,
+      loadNoteCards, createCard, renameCard, updateCardCategory, deleteCard,
+      addItem, updateItem, deleteItem, handleNoteKeydown,
+      onNoteDragStart, onNoteDragOver, onNoteDrop, onNoteDragEnd,
+      renderItemContent, copyItemContent, handleContentDblClick, startEditItem, saveEditItem, cancelEditItem, handleNotePaste, openNotePath,
       unlinkFolder,
       saveGoal, editGoal, archiveGoal, loadGoalStats, goalProgress,
       saveRoutine, editRoutine, archiveRoutine, createTaskFromRoutine,
@@ -2465,8 +3642,11 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       taskConversations, scanResults, scanningConversations, showScanModal,
       loadTaskConversations, scanConversations, linkConversation, unlinkConversation, continueConversation, quickContinueConversation,
       // Calendar
-      calendarYear, calendarMonth, calendarWeeks, calendarViewMode, calendarWeekDays,
-      timelineGroups,
+      calendarYear, calendarMonth, calendarWeeks, calendarViewMode, calendarWeekDays, calendarTab,
+      ganttData, ganttRows, ganttScaleBody, syncGanttScroll,
+      graphTooltip, graphCanvas, graphCanvasWrap,
+      graphMouseDown, graphMouseMove, graphMouseUp, graphWheel, graphClick, graphDblClick,
+      graphZoom, graphZoomTo, graphZoomIn, graphZoomOut,
       calendarPrevMonth, calendarNextMonth, calendarPrevWeek, calendarNextWeek,
       // Quick input
       quickInputText, quickInputParsed, createFromQuickInput,

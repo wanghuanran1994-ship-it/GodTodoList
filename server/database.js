@@ -38,6 +38,8 @@ async function init() {
   }
 
   save();
+  // 初始化完成后 500ms 内不触发防抖保存，防止覆盖恢复的数据库
+  saveSuppressUntil = Date.now() + 500;
   return db;
 }
 
@@ -182,18 +184,24 @@ function createTables() {
   db.run(`CREATE TABLE IF NOT EXISTS note_cards (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT DEFAULT '',
+    category TEXT DEFAULT '随手记',
     sort_order INTEGER DEFAULT 0,
     created_at TEXT,
     updated_at TEXT
   )`);
+  // 迁移：添加 category 列
+  try { db.run('ALTER TABLE note_cards ADD COLUMN category TEXT DEFAULT \'随手记\''); } catch (e) {}
   db.run(`CREATE TABLE IF NOT EXISTS note_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     card_id INTEGER NOT NULL,
     content TEXT DEFAULT '',
     sort_order INTEGER DEFAULT 0,
+    parent_id INTEGER,
     created_at TEXT,
     FOREIGN KEY (card_id) REFERENCES note_cards(id) ON DELETE CASCADE
   )`);
+  // migration: add parent_id if not exists
+  try { db.run('ALTER TABLE note_items ADD COLUMN parent_id INTEGER'); } catch(e) { /* already exists */ }
 
   // 日报/周报
   db.run(`CREATE TABLE IF NOT EXISTS reports (
@@ -348,7 +356,9 @@ function migrateFromJSON() {
 // ==================== 工具函数 ====================
 
 let saveTimer = null;
+let saveSuppressUntil = 0;
 function save() {
+  if (Date.now() < saveSuppressUntil) return;
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     const data = db.export();
@@ -516,7 +526,84 @@ function getTasks(filters = {}) {
   }
 
   sql += ' ORDER BY created_at DESC';
-  return queryAll(sql, params).map(enrichTask);
+  const tasks = queryAll(sql, params);
+  if (!tasks.length) return [];
+
+  // 批量预加载关联数据
+  const taskIds = tasks.map(t => t.id);
+  const placeholders = taskIds.map(() => '?').join(',');
+
+  // 批量加载 goals
+  const goalIds = [...new Set(tasks.map(t => t.goal_id).filter(Boolean))];
+  const goalsMap = {};
+  if (goalIds.length) {
+    const gPlaceholders = goalIds.map(() => '?').join(',');
+    queryAll(`SELECT id, name, color FROM goals WHERE id IN (${gPlaceholders})`, goalIds)
+      .forEach(g => { goalsMap[g.id] = g; });
+  }
+
+  // 批量加载 routines
+  const routineIds = [...new Set(tasks.map(t => t.routine_id).filter(Boolean))];
+  const routinesMap = {};
+  if (routineIds.length) {
+    const rPlaceholders = routineIds.map(() => '?').join(',');
+    queryAll(`SELECT id, name FROM routines WHERE id IN (${rPlaceholders})`, routineIds)
+      .forEach(r => { routinesMap[r.id] = r; });
+  }
+
+  // 批量加载 tags
+  const tagsMap = {};
+  queryAll(`SELECT tt.task_id, t.id, t.name, t.color FROM tags t JOIN task_tags tt ON t.id = tt.tag_id WHERE tt.task_id IN (${placeholders})`, taskIds)
+    .forEach(row => {
+      if (!tagsMap[row.task_id]) tagsMap[row.task_id] = [];
+      tagsMap[row.task_id].push({ id: row.id, name: row.name, color: row.color });
+    });
+
+  // 批量加载 people
+  const peopleMap = {};
+  queryAll(`SELECT task_id, person_name FROM task_people WHERE task_id IN (${placeholders})`, taskIds)
+    .forEach(row => {
+      if (!peopleMap[row.task_id]) peopleMap[row.task_id] = [];
+      peopleMap[row.task_id].push({ name: row.person_name });
+    });
+
+  // 批量加载 attachments
+  const attachmentsMap = {};
+  queryAll(`SELECT * FROM attachments WHERE task_id IN (${placeholders}) ORDER BY created_at`, taskIds)
+    .forEach(row => {
+      if (!attachmentsMap[row.task_id]) attachmentsMap[row.task_id] = [];
+      attachmentsMap[row.task_id].push(row);
+    });
+
+  // 批量加载 time_logs
+  const timeLogsMap = {};
+  queryAll(`SELECT * FROM time_logs WHERE task_id IN (${placeholders}) ORDER BY logged_at DESC`, taskIds)
+    .forEach(row => {
+      if (!timeLogsMap[row.task_id]) timeLogsMap[row.task_id] = [];
+      timeLogsMap[row.task_id].push(row);
+    });
+
+  // 批量加载 subtasks
+  const subtasksMap = {};
+  queryAll(`SELECT * FROM subtasks WHERE task_id IN (${placeholders}) ORDER BY sort_order, id`, taskIds)
+    .forEach(row => {
+      if (!subtasksMap[row.task_id]) subtasksMap[row.task_id] = [];
+      subtasksMap[row.task_id].push(row);
+    });
+
+  return tasks.map(t => ({
+    ...t,
+    is_today: !!t.is_today,
+    paths: safeJsonParse(t.paths, []),
+    goal_name: goalsMap[t.goal_id] ? goalsMap[t.goal_id].name : null,
+    goal_color: goalsMap[t.goal_id] ? goalsMap[t.goal_id].color : null,
+    routine_name: routinesMap[t.routine_id] ? routinesMap[t.routine_id].name : null,
+    tags: tagsMap[t.id] || [],
+    people: peopleMap[t.id] || [],
+    attachments: attachmentsMap[t.id] || [],
+    time_logs: timeLogsMap[t.id] || [],
+    subtasks: subtasksMap[t.id] || [],
+  }));
 }
 
 function enrichTask(t) {
@@ -553,7 +640,7 @@ function createTask(d) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, ?, ?, NULL, ?, ?)`,
     [d.title, d.description || '', d.context || '', d.goal_id || null, d.routine_id || null,
      d.parent_task_id || null, d.status || 'todo', d.estimated_time || 0,
-     d.due_date || new Date(Date.now() + 7*86400000).toISOString().slice(0, 10), d.is_today ? 1 : 0,
+     d.due_date || '', d.is_today ? 1 : 0,
      d.is_report ? 1 : 0, d.report_meeting || '', now(), now()]);
 
   const id = queryOne('SELECT last_insert_rowid() as id').id;
@@ -926,9 +1013,9 @@ function getNoteCards() {
   return cards;
 }
 
-function createNoteCard(title, content) {
-  db.run('INSERT INTO note_cards (title, created_at, updated_at) VALUES (?, ?, ?)',
-    [title || '', now(), now()]);
+function createNoteCard(title, content, category) {
+  db.run('INSERT INTO note_cards (title, category, created_at, updated_at) VALUES (?, ?, ?, ?)',
+    [title || '', category || '随手记', now(), now()]);
   const id = queryOne('SELECT last_insert_rowid() as id').id;
   if (content) {
     db.run('INSERT INTO note_items (card_id, content, sort_order, created_at) VALUES (?, ?, ?, ?)',
@@ -941,6 +1028,7 @@ function createNoteCard(title, content) {
 function updateNoteCard(id, data) {
   const fields = []; const params = [];
   if (data.title !== undefined) { fields.push('title = ?'); params.push(data.title); }
+  if (data.category !== undefined) { fields.push('category = ?'); params.push(data.category); }
   if (fields.length) {
     fields.push('updated_at = ?'); params.push(now());
     params.push(id);
@@ -955,18 +1043,27 @@ function deleteNoteCard(id) {
   save();
 }
 
-function addNoteItem(cardId, content) {
+function addNoteItem(cardId, content, parentId) {
   const maxSort = queryOne('SELECT MAX(sort_order) as m FROM note_items WHERE card_id = ?', [cardId]);
   const sort = (maxSort?.m ?? -1) + 1;
-  db.run('INSERT INTO note_items (card_id, content, sort_order, created_at) VALUES (?, ?, ?, ?)',
-    [cardId, content || '', sort, now()]);
+  db.run('INSERT INTO note_items (card_id, content, sort_order, parent_id, created_at) VALUES (?, ?, ?, ?, ?)',
+    [cardId, content || '', sort, parentId || null, now()]);
   db.run('UPDATE note_cards SET updated_at = ? WHERE id = ?', [now(), cardId]);
   save();
   return queryOne('SELECT last_insert_rowid() as id').id;
 }
 
-function updateNoteItem(id, content) {
-  db.run('UPDATE note_items SET content = ? WHERE id = ?', [content, id]);
+function updateNoteItem(id, content, parentId) {
+  if (parentId !== undefined) {
+    db.run('UPDATE note_items SET content = ?, parent_id = ? WHERE id = ?', [content || '', parentId || null, id]);
+  } else {
+    db.run('UPDATE note_items SET content = ? WHERE id = ?', [content || '', id]);
+  }
+  save();
+}
+
+function reorderNoteItem(id, sortOrder) {
+  db.run('UPDATE note_items SET sort_order = ? WHERE id = ?', [sortOrder, id]);
   save();
 }
 
