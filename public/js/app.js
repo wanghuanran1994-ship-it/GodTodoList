@@ -1686,7 +1686,7 @@ createApp({
       // AI enrich async
       fetchAISuggestions(id.id, parsed.title);
       // 自动触发 AI 分析
-      analyzeTaskProgress(id.id);
+      analyzeTaskProgress(id.id, true);
     }
 
     async function fetchAISuggestions(taskId, title) {
@@ -1943,7 +1943,7 @@ createApp({
       await loadTasks();
       selectTask(id.id);
       // 自动触发 AI 分析
-      analyzeTaskProgress(id.id);
+      analyzeTaskProgress(id.id, true);
     }
 
     function toggleNewTaskTag(tagId) {
@@ -3489,7 +3489,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       if (selectedTask.value?.id === taskId) selectedTask.value = await api(`/api/tasks/${taskId}`);
     }
 
-    async function analyzeTaskProgress(taskId) {
+    async function analyzeTaskProgress(taskId, silent = false) {
       analyzingTaskId.value = taskId;
       try {
         const result = await api(`/api/tasks/${taskId}/analyze-progress`, { method: 'POST' });
@@ -3498,12 +3498,11 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         if (selectedTask.value?.id === taskId) {
           selectedTask.value = await api(`/api/tasks/${taskId}`);
         }
-        // Show feedback if analysis is empty or error
-        if (!result.progress || result.progress.startsWith('分析失败') || result.progress.startsWith('请先配置')) {
+        if (!silent && (!result.progress || result.progress.startsWith('分析失败') || result.progress.startsWith('请先配置'))) {
           alert(result.progress || '分析完成，但无内容（任务可能没有关联目录）');
         }
       } catch (e) {
-        alert('AI 分析请求失败: ' + (e.message || '网络错误'));
+        if (!silent) alert('AI 分析请求失败: ' + (e.message || '网络错误'));
       }
       analyzingTaskId.value = null;
     }
