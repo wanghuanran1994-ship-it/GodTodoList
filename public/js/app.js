@@ -1686,7 +1686,7 @@ createApp({
       // AI enrich async
       fetchAISuggestions(id.id, parsed.title);
       // 自动触发 AI 分析
-      analyzeTaskProgress(id.id, true);
+      analyzeTaskProgress(id.id);
     }
 
     async function fetchAISuggestions(taskId, title) {
@@ -1943,7 +1943,8 @@ createApp({
       await loadTasks();
       selectTask(id.id);
       // 自动触发 AI 分析
-      analyzeTaskProgress(id.id, true);
+      console.log('🔄 quickCreateTask -> analyzeTaskProgress', id.id);
+      analyzeTaskProgress(id.id);
     }
 
     function toggleNewTaskTag(tagId) {
@@ -3489,20 +3490,19 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       if (selectedTask.value?.id === taskId) selectedTask.value = await api(`/api/tasks/${taskId}`);
     }
 
-    async function analyzeTaskProgress(taskId, silent = false) {
+    async function analyzeTaskProgress(taskId) {
+      console.log('🔄 analyzeTaskProgress called', taskId);
       analyzingTaskId.value = taskId;
       try {
         const result = await api(`/api/tasks/${taskId}/analyze-progress`, { method: 'POST' });
+        console.log('🔄 analyzeTaskProgress result', result);
         expandedProgress.value[taskId] = true;
         await loadTasks();
         if (selectedTask.value?.id === taskId) {
           selectedTask.value = await api(`/api/tasks/${taskId}`);
         }
-        if (!silent && (!result.progress || result.progress.startsWith('分析失败') || result.progress.startsWith('请先配置'))) {
-          alert(result.progress || '分析完成，但无内容（任务可能没有关联目录）');
-        }
       } catch (e) {
-        if (!silent) alert('AI 分析请求失败: ' + (e.message || '网络错误'));
+        console.error('🔄 analyzeTaskProgress error', e.message);
       }
       analyzingTaskId.value = null;
     }
