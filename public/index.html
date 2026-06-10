@@ -1090,15 +1090,7 @@
                   <div style="display:flex;align-items:center;gap:4px">
                     <input type="text" v-model="aiSuggestions.folder_name" class="input ai-suggest-input"
                            placeholder="新目录名（在根目录下创建）" style="flex:1">
-                  </div>
-                  <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
                     <button class="btn btn-xs" @click="aiPickFolder">📂 选择已有目录</button>
-                    <template v-if="aiSuggestions.existing_dirs && aiSuggestions.existing_dirs.length">
-                      <span v-for="d in aiSuggestions.existing_dirs" :key="d.path"
-                            @click="aiSuggestions.reuse_folder_path = d.path"
-                            style="padding:1px 7px;border:1px solid var(--border);border-radius:8px;font-size:10px;cursor:pointer;background:#fff"
-                            :title="d.path">{{ d.name }}</span>
-                    </template>
                   </div>
                 </template>
                 <!-- 已选已有目录：显示路径，隐藏新建 -->
