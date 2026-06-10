@@ -713,8 +713,8 @@ app.post('/api/ai/decompose', (req, res) => {
       hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'Authorization': `Bearer ${cfg.api_key}` },
     };
-    if (cfg.x_token) options.headers['X-Token'] = cfg.x_token;
   }
+  if (cfg.x_token) options.headers['X-Token'] = cfg.x_token;
 
   const proxyReq = requester.request(options, (proxyRes) => {
     let body = '';
@@ -811,8 +811,8 @@ ${existingDirs}
       hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'Authorization': `Bearer ${cfg.api_key}` },
     };
-    if (cfg.x_token) options.headers['X-Token'] = cfg.x_token;
   }
+  if (cfg.x_token) options.headers['X-Token'] = cfg.x_token;
 
   const proxyReq = requester.request(options, (proxyRes) => {
     let body = '';
@@ -1001,7 +1001,7 @@ function proxyOpenAI(baseUrl, model, apiKey, xToken, allMessages, res) {
 }
 
 // Anthropic Claude 协议
-function proxyAnthropic(baseUrl, model, apiKey, allMessages, res) {
+function proxyAnthropic(baseUrl, model, apiKey, xToken, allMessages, res) {
   const isHttps = baseUrl.toLowerCase().startsWith('https');
   const requester = isHttps ? https : http;
 
@@ -1035,6 +1035,7 @@ function proxyAnthropic(baseUrl, model, apiKey, allMessages, res) {
       'anthropic-version': '2023-06-01',
     },
   };
+  if (xToken) options.headers['X-Token'] = xToken;
 
   const proxyReq = requester.request(options, (proxyRes) => {
     // 非 2xx 状态码：收集错误信息直接返回 JSON
@@ -1246,8 +1247,8 @@ function aiChatSync(cfg, messages) {
       headers['x-api-key'] = cfg.api_key;
     } else {
       headers['Authorization'] = `Bearer ${cfg.api_key}`;
-      if (cfg.x_token) headers['X-Token'] = cfg.x_token;
     }
+    if (cfg.x_token) headers['X-Token'] = cfg.x_token;
 
     const proxyReq = requester.request({ hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000, headers }, (proxyRes) => {
       let body = '';
@@ -1431,7 +1432,7 @@ app.post('/api/ai/chat', (req, res) => {
   const allMessages = [systemMsg, ...(messages || [])];
 
   if (provider === 'anthropic') {
-    proxyAnthropic(cfg.base_url, cfg.model, cfg.api_key, allMessages, res);
+    proxyAnthropic(cfg.base_url, cfg.model, cfg.api_key, cfg.x_token, allMessages, res);
   } else {
     proxyOpenAI(cfg.base_url, cfg.model, cfg.api_key, cfg.x_token, allMessages, res);
   }
