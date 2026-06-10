@@ -2748,6 +2748,18 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       return Math.round((stat.done_tasks / stat.total_tasks) * 100);
     }
 
+    const collapsedGoalFolders = reactive({});
+    function toggleGoalFolders(goalId) {
+      collapsedGoalFolders[goalId] = !collapsedGoalFolders[goalId];
+    }
+
+    function goalDeadlineHint(stat) {
+      if (!stat.target_date) return '';
+      const remainingMs = new Date(stat.target_date) - new Date();
+      if (remainingMs <= 0) return '已过期';
+      return '剩余 ' + formatDuration(remainingMs / 60000);
+    }
+
     // ==================== 惯例操作 ====================
     async function saveRoutine() {
       if (!routineForm.name.trim()) return;
@@ -3444,7 +3456,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       if (mins >= 43200) return `${(mins / 43200).toFixed(1)}个月`;
       if (mins >= 1440) return `${(mins / 1440).toFixed(1)}天`;
       if (mins >= 60) return `${(mins / 60).toFixed(1)}小时`;
-      if (mins >= 1) return `${Math.round(mins)}分钟`;
+      if (mins >= 1) return `${mins.toFixed(1)}分钟`;
       return `${Math.round(mins * 60)}秒`;
     }
 
@@ -3758,6 +3770,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       renderItemContent, copyItemContent, onNoteClick, startEditItem, saveEditItem, cancelEditItem, handleNotePaste, openNotePath,
       unlinkFolder,
       saveGoal, editGoal, archiveGoal, loadGoalStats, goalProgress,
+      collapsedGoalFolders, toggleGoalFolders, goalDeadlineHint,
       saveRoutine, editRoutine, archiveRoutine, createTaskFromRoutine,
       loadTimeStats, loadReview, barHeight,
       saveSettings,
@@ -3775,7 +3788,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       clearAIChat, closeAIChat, sendAIMessage, sendAIPrompt, renderMarkdown,
       noteChatCardId, noteConversations, openNoteChat,
       // Timer
-      activeTimers, startTaskTimer, stopTaskTimer, isTimerActive, getTimerElapsed, formatTime,
+      activeTimers, startTaskTimer, stopTaskTimer, isTimerActive, getTimerElapsed, formatTime, formatDuration,
       // Today
       toggleToday,
       // Subtasks

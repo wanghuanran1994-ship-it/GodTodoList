@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GodTodoList - 事项管理体系</title>
-  <link rel="stylesheet" href="/css/style.css?v=12">
+  <link rel="stylesheet" href="/css/style.css?v=13">
 </head>
 <body>
   <div id="app">
@@ -469,51 +469,57 @@
         </div>
         <div class="goals-grid">
           <div class="goal-card" v-for="stat in goalStats" :key="stat.id">
-            <div class="goal-card-header">
-              <span class="goal-color-bar" :style="{ background: stat.color }"></span>
-              <h3 class="goal-card-title">{{ stat.name }}</h3>
-            </div>
-            <div class="goal-progress">
-              <div class="progress-bar">
-                <div class="progress-fill" :style="{ width: goalProgress(stat) + '%', background: stat.color }"></div>
+            <div class="goal-card-left">
+              <div class="goal-card-header">
+                <span class="goal-color-bar" :style="{ background: stat.color }"></span>
+                <h3 class="goal-card-title">{{ stat.name }}</h3>
               </div>
-              <span class="progress-text">{{ goalProgress(stat) }}% · {{ stat.done_tasks || 0 }}/{{ stat.total_tasks || 0 }}</span>
-            </div>
-            <div class="goal-stats-row">
-              <div class="stat-item"><span class="stat-num">{{ stat.todo_tasks || 0 }}</span><span class="stat-label">待办</span></div>
-              <div class="stat-item"><span class="stat-num">{{ stat.in_progress_tasks || 0 }}</span><span class="stat-label">进行中</span></div>
-              <div class="stat-item"><span class="stat-num">{{ stat.total_time || 0 }}/{{ stat.total_estimated || 0 }}</span><span class="stat-label">投入/预估(分)</span></div>
-            </div>
-            <div class="goal-deadline">
-              <label>目标日期</label>
-              <input type="date" :value="stat.target_date" @change="saveGoalTargetDate(stat.id, $event.target.value)" class="input goal-date-input">
-              <span class="goal-deadline-hint" v-if="stat.target_date">剩余 {{ Math.ceil((new Date(stat.target_date) - new Date()) / 86400000) }} 天</span>
-            </div>
-            <!-- 关联目录列表 -->
-            <div class="goal-folders">
-              <div class="goal-folders-title">📂 关联路径</div>
-              <!-- 自定义路径 -->
-              <div class="path-item" v-for="(p, pi) in (stat.paths || [])" :key="'gp'+pi">
-                <span class="path-name" @click="openFolderFor(p)" :title="p">{{ p.split(/[/\\]/).pop() || p }}</span>
-                <span class="path-full" :title="p">{{ p }}</span>
-                <button class="btn btn-xs" @click="openFolderFor(p)">打开</button>
-                <button class="btn btn-xs btn-danger" @click="removeGoalPath(stat.id, pi)">×</button>
+              <div class="goal-progress">
+                <div class="progress-bar">
+                  <div class="progress-fill" :style="{ width: goalProgress(stat) + '%', background: stat.color }"></div>
+                </div>
+                <span class="progress-text">{{ goalProgress(stat) }}% · {{ stat.done_tasks || 0 }}/{{ stat.total_tasks || 0 }}</span>
               </div>
-              <!-- 任务关联的目录 -->
-              <div class="path-item" v-for="f in goalTaskFolders(stat.id)" :key="f.task_id">
-                <span class="path-name" @click="openFolderFor(f.folder_path)">{{ f.folder_name }}</span>
-                <span class="path-task-link">← {{ f.task_title }}</span>
-                <button class="btn btn-xs" @click="openFolderFor(f.folder_path)">打开</button>
-                <button class="btn btn-xs" @click="goToTask(f.task_id)" :title="'查看任务: ' + f.task_title">📋</button>
+              <div class="goal-stats-row">
+                <div class="stat-item"><span class="stat-num">{{ stat.todo_tasks || 0 }}</span><span class="stat-label">待办</span></div>
+                <div class="stat-item"><span class="stat-num">{{ stat.in_progress_tasks || 0 }}</span><span class="stat-label">进行中</span></div>
+                <div class="stat-item"><span class="stat-num">{{ formatDuration(stat.total_time || 0) }}/{{ formatDuration(stat.total_estimated || 0) }}</span><span class="stat-label">投入/预估</span></div>
               </div>
-              <div style="display:flex;gap:4px">
-                <button class="btn btn-xs" @click="addGoalPath(stat.id)">＋ 添加路径</button>
-                <button class="btn btn-xs" @click="refreshGoalPaths(stat.id)" title="自动识别关联任务的目录">🔄 刷新</button>
+              <div class="goal-deadline">
+                <label>目标日期</label>
+                <input type="date" :value="stat.target_date" @change="saveGoalTargetDate(stat.id, $event.target.value)" class="input goal-date-input">
+                <span class="goal-deadline-hint" v-if="stat.target_date">{{ goalDeadlineHint(stat) }}</span>
+              </div>
+              <div class="goal-card-actions">
+                <button class="btn btn-sm" @click="editGoal(stat)">编辑</button>
+                <button class="btn btn-sm btn-danger" @click="archiveGoal(stat.id)">归档</button>
               </div>
             </div>
-            <div class="goal-card-actions">
-              <button class="btn btn-sm" @click="editGoal(stat)">编辑</button>
-              <button class="btn btn-sm btn-danger" @click="archiveGoal(stat.id)">归档</button>
+            <div class="goal-card-right">
+              <div class="goal-folders-header" @click="toggleGoalFolders(stat.id)">
+                <span class="goal-folders-title">📂 关联路径</span>
+                <span class="goal-folders-toggle">{{ collapsedGoalFolders[stat.id] ? '▶' : '▼' }}</span>
+              </div>
+              <div class="goal-folders-body" v-show="!collapsedGoalFolders[stat.id]">
+                <!-- 自定义路径 -->
+                <div class="path-item" v-for="(p, pi) in (stat.paths || [])" :key="'gp'+pi">
+                  <span class="path-name" @click="openFolderFor(p)" :title="p">{{ p.split(/[/\\]/).pop() || p }}</span>
+                  <span class="path-full" :title="p">{{ p }}</span>
+                  <button class="btn btn-xs" @click="openFolderFor(p)">打开</button>
+                  <button class="btn btn-xs btn-danger" @click="removeGoalPath(stat.id, pi)">×</button>
+                </div>
+                <!-- 任务关联的目录 -->
+                <div class="path-item" v-for="f in goalTaskFolders(stat.id)" :key="f.task_id">
+                  <span class="path-name" @click="openFolderFor(f.folder_path)">{{ f.folder_name }}</span>
+                  <span class="path-task-link">← {{ f.task_title }}</span>
+                  <button class="btn btn-xs" @click="openFolderFor(f.folder_path)">打开</button>
+                  <button class="btn btn-xs" @click="goToTask(f.task_id)" :title="'查看任务: ' + f.task_title">📋</button>
+                </div>
+                <div style="display:flex;gap:4px">
+                  <button class="btn btn-xs" @click="addGoalPath(stat.id)">＋ 添加路径</button>
+                  <button class="btn btn-xs" @click="refreshGoalPaths(stat.id)" title="自动识别关联任务的目录">🔄 刷新</button>
+                </div>
+              </div>
             </div>
           </div>
           <div class="goal-card add-goal" @click="showGoalModal = true">
@@ -1061,15 +1067,15 @@
             <button class="btn-icon" @click="dismissAISuggestions">×</button>
           </div>
           <div class="ai-suggestion-body">
-            <div class="ai-suggest-item" v-if="aiSuggestions.title">
+            <div class="ai-suggest-item">
               <span class="ai-suggest-label">任务名</span>
               <input type="text" v-model="aiSuggestions.title" class="input ai-suggest-input">
             </div>
-            <div class="ai-suggest-item" v-if="aiSuggestions.description">
+            <div class="ai-suggest-item">
               <span class="ai-suggest-label">描述</span>
               <input type="text" v-model="aiSuggestions.description" class="input ai-suggest-input">
             </div>
-            <div class="ai-suggest-item" v-if="aiSuggestions.estimated_time">
+            <div class="ai-suggest-item" v-if="aiSuggestions.estimated_time != null">
               <span class="ai-suggest-label">预估</span>
               <span v-if="!aiSuggestions._editingTime" style="color:var(--primary);font-weight:600;font-size:var(--text-sm);cursor:pointer"
                     @click="aiSuggestions._editingTime = true">{{ formatTime(aiSuggestions.estimated_time) }}</span>
@@ -1696,6 +1702,6 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
-  <script src="/js/app.js?v=15"></script>
+  <script src="/js/app.js?v=16"></script>
 </body>
 </html>
