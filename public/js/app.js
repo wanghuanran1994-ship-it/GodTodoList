@@ -3105,7 +3105,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
           if (refKey === 'rootDir') settings.root_dir = result.path;
           else if (refKey === 'importDir') importDir.value = result.path;
         }
-      } catch (e) {}
+      } catch (e) { console.error('pickFolderFor error:', e); }
     }
 
     async function pickFileFor(refKey) {
