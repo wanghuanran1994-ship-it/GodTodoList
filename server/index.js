@@ -530,20 +530,10 @@ app.post('/api/pick-folder', asyncHandler(async (req, res) => {
     if (platform === 'darwin') {
       folderPath = execSync(`osascript -e 'choose folder' -e 'POSIX path of result'`, { encoding: 'utf-8', timeout: 60000 }).trim();
     } else if (platform === 'win32') {
-      // PowerShell + .NET FolderBrowserDialog，输出写入临时文件避免编码问题
-      const outFile = path.join(os.tmpdir(), `godtodo_pick_${Date.now()}.txt`);
-      const ps1Script = path.join(os.tmpdir(), `godtodo_pick_${Date.now()}.ps1`);
-      const psCode = `Add-Type -AssemblyName System.Windows.Forms\r\n$f = New-Object System.Windows.Forms.FolderBrowserDialog\r\n$f.Description = "选择任务根目录"\r\nif ($f.ShowDialog() -eq 'OK') { [System.IO.File]::WriteAllText('${outFile.replace(/\\/g, '\\\\')}', $f.SelectedPath, [System.Text.Encoding]::UTF8) }`;
-      fs.writeFileSync(ps1Script, psCode, 'utf-8');
-      try {
-        execSync(`powershell -NoProfile -ExecutionPolicy Bypass -STA -File "${ps1Script}"`, { timeout: 60000 });
-        if (fs.existsSync(outFile)) {
-          folderPath = fs.readFileSync(outFile, 'utf-8').trim();
-        }
-      } finally {
-        try { fs.unlinkSync(ps1Script); } catch (e) {}
-        try { fs.unlinkSync(outFile); } catch (e) {}
-      }
+      folderPath = execSync(
+        `powershell -NoProfile -ExecutionPolicy Bypass -STA -Command "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = '选择任务根目录'; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }"`,
+        { encoding: 'utf-8', timeout: 60000 }
+      ).trim();
     } else {
       // Linux: try zenity
       folderPath = execSync('zenity --file-selection --directory 2>/dev/null || echo ""', { encoding: 'utf-8', timeout: 60000 }).trim();
@@ -563,19 +553,10 @@ app.post('/api/pick-file', asyncHandler(async (req, res) => {
     if (platform === 'darwin') {
       filePath = execSync(`osascript -e 'choose file' -e 'POSIX path of result'`, { encoding: 'utf-8', timeout: 60000 }).trim();
     } else if (platform === 'win32') {
-      const outFile = path.join(os.tmpdir(), `godtodo_pick_file_${Date.now()}.txt`);
-      const ps1Script = path.join(os.tmpdir(), `godtodo_pick_file_${Date.now()}.ps1`);
-      const psCode = `Add-Type -AssemblyName System.Windows.Forms\r\n$d = New-Object System.Windows.Forms.OpenFileDialog\r\n$d.Filter = "可执行文件 (*.exe;*.bat;*.cmd)|*.exe;*.bat;*.cmd|所有文件 (*.*)|*.*"\r\nif ($d.ShowDialog() -eq 'OK') { [System.IO.File]::WriteAllText('${outFile.replace(/\\/g, '\\\\')}', $d.FileName, [System.Text.Encoding]::UTF8) }`;
-      fs.writeFileSync(ps1Script, psCode, 'utf-8');
-      try {
-        execSync(`powershell -NoProfile -ExecutionPolicy Bypass -STA -File "${ps1Script}"`, { timeout: 60000 });
-        if (fs.existsSync(outFile)) {
-          filePath = fs.readFileSync(outFile, 'utf-8').trim();
-        }
-      } finally {
-        try { fs.unlinkSync(ps1Script); } catch (e) {}
-        try { fs.unlinkSync(outFile); } catch (e) {}
-      }
+      filePath = execSync(
+        `powershell -NoProfile -ExecutionPolicy Bypass -STA -Command "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = '可执行文件 (*.exe;*.bat;*.cmd)|*.exe;*.bat;*.cmd|所有文件 (*.*)|*.*'; if ($d.ShowDialog() -eq 'OK') { Write-Output $d.FileName }"`,
+        { encoding: 'utf-8', timeout: 60000 }
+      ).trim();
     } else {
       filePath = execSync('zenity --file-selection 2>/dev/null || echo ""', { encoding: 'utf-8', timeout: 60000 }).trim();
     }
@@ -752,28 +733,10 @@ app.post('/api/ai/enrich', (req, res) => {
   const goalList = allGoals.map(g => g.name).join('、') || '无';
   const tagList = allTags.map(t => t.name).join('、') || '无';
 
-  // 扫描 root_dir 下已有目录
-  let existingDirs = '';
-  let existingDirList = [];
-  try {
-    const rootDir = fm.getRootDir();
-    if (fs.existsSync(rootDir)) {
-      const dirs = fs.readdirSync(rootDir, { withFileTypes: true })
-        .filter(e => e.isDirectory() && !e.name.startsWith('.'))
-        .map(e => ({ name: e.name, path: path.join(rootDir, e.name) }))
-        .slice(0, 30);
-      existingDirs = dirs.map(d => d.name).join('\n') || '无';
-      existingDirList = dirs;
-    }
-  } catch (e) { existingDirs = '无'; }
-
   const prompt = `你是一个项目管理助手。请根据用户输入，给出以下建议（JSON格式）：
 用户输入：${title}
 可选目标：${goalList}
 可选标签：${tagList}
-
-已有的任务目录（在root_dir下）：
-${existingDirs}
 
 首先，从用户输入中提取一个简洁的任务标题（10字以内）。
 然后严格返回以下JSON格式（不要其他内容）：
@@ -784,8 +747,7 @@ ${existingDirs}
   "goal": "最匹配的目标名称（从可选目标中选，不确定则留空）",
   "tags": ["匹配的标签名1"],
   "subtasks": ["子任务1", "子任务2", "子任务3"],
-  "folder_name": "简短的英文/拼音文件夹名（如 feature-analysis, api-refactor，10字符以内）",
-  "reuse_folder": "如果已有目录完全匹配此任务，填目录名（从已有目录列表中选）；否则留空"
+  "folder_name": "简短的英文/拼音文件夹名（如 feature-analysis, api-refactor，10字符以内）"
 }`;
 
   const isHttps = cfg.base_url.toLowerCase().startsWith('https');
@@ -845,18 +807,6 @@ ${existingDirs}
         }
         delete parsed.tags;
 
-        // 处理复用目录：将目录名解析为完整路径
-        if (parsed.reuse_folder) {
-          const rootDir = fm.getRootDir();
-          const fullPath = path.join(rootDir, parsed.reuse_folder);
-          if (fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory()) {
-            parsed.reuse_folder_path = fullPath;
-          } else {
-            delete parsed.reuse_folder;
-          }
-        }
-
-        parsed.existing_dirs = existingDirList;
         res.json(parsed);
       } catch (e) {
         res.json({});
