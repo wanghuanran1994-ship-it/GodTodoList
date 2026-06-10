@@ -700,7 +700,7 @@ app.post('/api/ai/decompose', (req, res) => {
   if (cfg.provider === 'anthropic') {
     const fullUrl = baseEndpoint.endsWith('/v1') ? baseEndpoint + '/messages' : baseEndpoint + '/v1/messages';
     const url = new URL(fullUrl);
-    postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: 1024 });
+    postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: 1024, stream: false });
     options = {
       hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'x-api-key': cfg.api_key, 'anthropic-version': '2023-06-01' },
@@ -708,7 +708,7 @@ app.post('/api/ai/decompose', (req, res) => {
   } else {
     const fullUrl = baseEndpoint.endsWith('/v1') ? baseEndpoint + '/chat/completions' : baseEndpoint + '/v1/chat/completions';
     const url = new URL(fullUrl);
-    postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }] });
+    postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], stream: false });
     options = {
       hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'Authorization': `Bearer ${cfg.api_key}` },
@@ -721,13 +721,12 @@ app.post('/api/ai/decompose', (req, res) => {
     proxyRes.on('data', chunk => body += chunk);
     proxyRes.on('end', () => {
       try {
+        const json = JSON.parse(body);
         let text = '';
         if (cfg.provider === 'anthropic') {
-          const json = JSON.parse(body);
-          text = json.content?.[0]?.text || '';
+          text = json.content?.[0]?.text || (typeof json.content === 'string' ? json.content : '') || '';
         } else {
-          const json = JSON.parse(body);
-          text = json.choices?.[0]?.message?.content || '';
+          text = json.content || json.choices?.[0]?.message?.content || json.choices?.[0]?.text || '';
         }
         const subtasks = text.split('\n').map(s => s.replace(/^[\d.\-*]+\s*/, '').trim()).filter(s => s.length > 1);
         res.json({ subtasks });
@@ -798,7 +797,7 @@ ${existingDirs}
   if (cfg.provider === 'anthropic') {
     const fullUrl = baseEndpoint2.endsWith('/v1') ? baseEndpoint2 + '/messages' : baseEndpoint2 + '/v1/messages';
     const url = new URL(fullUrl);
-    postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: 1024 });
+    postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: 1024, stream: false });
     options = {
       hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'x-api-key': cfg.api_key, 'anthropic-version': '2023-06-01' },
@@ -806,7 +805,7 @@ ${existingDirs}
   } else {
     const fullUrl = baseEndpoint2.endsWith('/v1') ? baseEndpoint2 + '/chat/completions' : baseEndpoint2 + '/v1/chat/completions';
     const url = new URL(fullUrl);
-    postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }] });
+    postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], stream: false });
     options = {
       hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'Authorization': `Bearer ${cfg.api_key}` },
@@ -819,13 +818,12 @@ ${existingDirs}
     proxyRes.on('data', chunk => body += chunk);
     proxyRes.on('end', () => {
       try {
+        const json = JSON.parse(body);
         let text = '';
         if (cfg.provider === 'anthropic') {
-          const json = JSON.parse(body);
-          text = json.content?.[0]?.text || '';
+          text = json.content?.[0]?.text || (typeof json.content === 'string' ? json.content : '') || '';
         } else {
-          const json = JSON.parse(body);
-          text = json.choices?.[0]?.message?.content || '';
+          text = json.content || json.choices?.[0]?.message?.content || json.choices?.[0]?.text || '';
         }
         // Extract JSON from response (may have markdown wrapping)
         let cleanText = text.replace(/```(?:json)?\s*([\s\S]*?)```/g, '$1').trim();
@@ -1257,9 +1255,9 @@ function aiChatSync(cfg, messages) {
         try {
           const data = JSON.parse(body);
           if (provider === 'anthropic') {
-            resolve(data.content?.[0]?.text || '无内容');
+            resolve(data.content?.[0]?.text || (typeof data.content === 'string' ? data.content : '') || '无内容');
           } else {
-            resolve(data.choices?.[0]?.message?.content || '无内容');
+            resolve(data.content || data.choices?.[0]?.message?.content || data.choices?.[0]?.text || '无内容');
           }
         } catch (e) { reject(new Error('解析响应失败')); }
       });
