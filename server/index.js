@@ -1192,6 +1192,7 @@ function aiChatSync(cfg, messages) {
     const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) };
     if (provider === 'anthropic') {
       headers['x-api-key'] = cfg.api_key;
+      headers['anthropic-version'] = '2023-06-01';
     } else {
       headers['Authorization'] = `Bearer ${cfg.api_key}`;
     }
