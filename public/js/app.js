@@ -1943,7 +1943,6 @@ createApp({
       await loadTasks();
       selectTask(id.id);
       // 自动触发 AI 分析
-      console.log('🔄 quickCreateTask -> analyzeTaskProgress', id.id);
       analyzeTaskProgress(id.id);
     }
 
@@ -3491,18 +3490,16 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
     }
 
     async function analyzeTaskProgress(taskId) {
-      console.log('🔄 analyzeTaskProgress called', taskId);
       analyzingTaskId.value = taskId;
       try {
         const result = await api(`/api/tasks/${taskId}/analyze-progress`, { method: 'POST' });
-        console.log('🔄 analyzeTaskProgress result', result);
         expandedProgress.value[taskId] = true;
         await loadTasks();
         if (selectedTask.value?.id === taskId) {
           selectedTask.value = await api(`/api/tasks/${taskId}`);
         }
       } catch (e) {
-        console.error('🔄 analyzeTaskProgress error', e.message);
+        // auto-triggered, fail silently
       }
       analyzingTaskId.value = null;
     }

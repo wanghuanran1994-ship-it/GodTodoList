@@ -1466,18 +1466,10 @@ app.post('/api/note-cards/:id/items', (req, res) => {
 
 app.put('/api/note-items/reorder', (req, res) => {
   const items = req.body.items || [];
-  console.log('PUT /api/note-items/reorder', JSON.stringify(items));
-  try {
-    for (const it of items) {
-      console.log('  updating item', it.id, 'sort_order ->', it.sort_order);
-      db.reorderNoteItem(it.id, it.sort_order);
-    }
-    console.log('  done, success');
-    res.json({ success: true });
-  } catch (e) {
-    console.error('  FAIL', e.message);
-    res.status(500).json({ error: e.message });
+  for (const it of items) {
+    db.reorderNoteItem(it.id, it.sort_order);
   }
+  res.json({ success: true });
 });
 
 app.put('/api/note-items/:id', (req, res) => {
