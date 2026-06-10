@@ -1685,6 +1685,8 @@ createApp({
 
       // AI enrich async
       fetchAISuggestions(id.id, parsed.title);
+      // 自动触发 AI 分析
+      analyzeTaskProgress(id.id);
     }
 
     async function fetchAISuggestions(taskId, title) {
