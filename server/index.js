@@ -1464,17 +1464,31 @@ app.post('/api/note-cards/:id/items', (req, res) => {
   res.json({ id });
 });
 
+app.put('/api/note-items/reorder', (req, res) => {
+  const items = req.body.items || [];
+  console.log('PUT /api/note-items/reorder', JSON.stringify(items));
+  try {
+    for (const it of items) {
+      console.log('  updating item', it.id, 'sort_order ->', it.sort_order);
+      db.reorderNoteItem(it.id, it.sort_order);
+    }
+    console.log('  done, success');
+    res.json({ success: true });
+  } catch (e) {
+    console.error('  FAIL', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.put('/api/note-items/:id', (req, res) => {
   const body = req.body;
   db.updateNoteItem(Number(req.params.id), body.content || '', body.parent_id);
   res.json({ success: true });
 });
 
-app.put('/api/note-items/reorder', (req, res) => {
+app.put('/api/note-cards/reorder', (req, res) => {
   const items = req.body.items || [];
-  for (const it of items) {
-    db.reorderNoteItem(it.id, it.sort_order);
-  }
+  db.reorderNoteCards(items);
   res.json({ success: true });
 });
 

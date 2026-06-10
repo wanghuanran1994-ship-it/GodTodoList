@@ -622,9 +622,11 @@
 
           <!-- 卡片网格 -->
           <div v-if="filteredNoteCards.length" class="notes-grid">
-            <div v-for="card in filteredNoteCards" :key="card.id" class="note-card">
+            <div v-for="card in filteredNoteCards" :key="card.id" class="note-card"
+                 :data-card-id="card.id"
+                 :style="cardSizes[card.id] ? { width: cardSizes[card.id].w + 'px', height: cardSizes[card.id].h + 'px' } : {}">
               <div class="note-card-header">
-                <span class="note-card-category" :style="{ background: (NOTE_CATEGORIES.find(c => c.key === (card.category || '随手记')) || NOTE_CATEGORIES[0]).color }"
+                <span class="note-card-category" :style="{ color: (NOTE_CATEGORIES.find(c => c.key === (card.category || '随手记')) || NOTE_CATEGORIES[0]).color }"
                       @click.stop="cycleCardCategory(card)" title="点击切换分类">
                   {{ (NOTE_CATEGORIES.find(c => c.key === (card.category || '随手记')) || NOTE_CATEGORIES[0]).icon }}
                   {{ card.category || '随手记' }}
@@ -643,15 +645,15 @@
                 </button>
               </div>
 
-              <div class="note-items">
+              <div class="note-items"
+                   :data-card-id="card.id">
                 <div v-for="item in card.items" :key="item.id" class="note-item"
-                     draggable="true"
+                     :data-item-id="item.id"
                      :class="{ editing: editingItemId === item.id, 'note-item-child': item.parent_id }"
-                     :style="{ paddingLeft: item.parent_id ? '28px' : '' }"
-                     @dragstart="onNoteDragStart($event, card.id, item.id)"
-                     @dragover.prevent="onNoteDragOver($event, card.id, item.id)"
-                     @drop="onNoteDrop($event, card.id, item.id)"
-                     @dragend="onNoteDragEnd">
+                     :style="{ paddingLeft: item.parent_id ? '28px' : '' }">
+                  <span class="note-item-handle"
+                        @mousedown="onNoteHandleDown($event, card.id, item.id)"
+                        title="拖拽排序">⋮⋮</span>
                   <span class="note-item-bullet" :class="{ child: item.parent_id }"></span>
                   <!-- 编辑模式 -->
                   <textarea v-if="editingItemId === item.id"

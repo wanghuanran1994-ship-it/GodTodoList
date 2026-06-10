@@ -254,6 +254,64 @@ createApp({
       { key: '手里剑', icon: '⚡', color: '#7c3aed' },
     ];
     const noteCards = ref([]);
+    const cardSizes = ref({});
+
+    function loadCardSizes() {
+      try {
+        const saved = localStorage.getItem('noteCardSizes');
+        if (saved) cardSizes.value = JSON.parse(saved);
+      } catch (e) { /* ignore */ }
+    }
+    function saveCardSizesFromDOM() {
+      const sizes = {};
+      document.querySelectorAll('.note-card').forEach(el => {
+        const cardId = el.dataset.cardId;
+        if (!cardId) return;
+        const w = Math.round(el.clientWidth);
+        const h = Math.round(el.clientHeight);
+        if (w > 0 && h > 0) sizes[cardId] = { w, h };
+      });
+      localStorage.setItem('noteCardSizes', JSON.stringify(sizes));
+    }
+    function applyCardMinSizes() {
+      setTimeout(() => {
+        document.querySelectorAll('.note-card').forEach(el => {
+          // Height
+          const header = el.querySelector('.note-card-header');
+          const items = el.querySelector('.note-items');
+          const addRow = el.querySelector('.note-add-row');
+          let realH = 0;
+          if (header) realH += header.offsetHeight;
+          if (items) {
+            for (const child of items.children) {
+              realH += child.offsetHeight;
+            }
+          }
+          if (addRow) realH += addRow.offsetHeight;
+          el.style.minHeight = Math.max(180, realH + 8) + 'px';
+          // Width
+          let minW = 280;
+          const itemContents = el.querySelectorAll('.note-item-content');
+          for (const content of itemContents) {
+            const text = content.textContent || '';
+            const tokens = text.split(/\s+/);
+            for (const token of tokens) {
+              if (token.length > 40) minW = Math.max(minW, token.length * 8 + 60);
+            }
+            const imgs = content.querySelectorAll('img');
+            for (const img of imgs) {
+              if (img.naturalWidth > 0) minW = Math.max(minW, img.naturalWidth + 60);
+            }
+            const tables = content.querySelectorAll('.nc-table-wrap');
+            for (const tbl of tables) {
+              minW = Math.max(minW, tbl.scrollWidth + 60);
+            }
+          }
+          el.style.minWidth = minW + 'px';
+        });
+      }, 150);
+    }
+
     const newCardText = ref('');
     const newCardCategory = ref('随手记');
     const filterNoteCategory = ref(null);
@@ -429,6 +487,7 @@ createApp({
     // ==================== 视图切换 ====================
     function switchView(view) {
       if (view === 'gantt') view = 'calendar';
+      if (currentView.value === 'notes' && view !== 'notes') saveCardSizesFromDOM();
       currentView.value = view;
       if (view !== 'kanban') closeDetail();
       if (view === 'goals') loadGoalStats();
@@ -1066,8 +1125,9 @@ createApp({
       // ---- 目标标签 ----
       for (const n of goalNodes) {
         const r = gHovered === n ? n.radius + 5 : n.radius;
-        const labelW = n.label.length * 7 + 16;
         const labelH = 20, labelY = n.y - r - 16;
+        gCtx.font = '600 12px -apple-system, "PingFang SC", sans-serif';
+        const labelW = gCtx.measureText(n.label).width + 16;
         gCtx.fillStyle = dark ? 'rgba(20,20,30,0.85)' : 'rgba(255,255,255,0.9)';
         gCtx.beginPath();
         if (gCtx.roundRect) {
@@ -1077,7 +1137,6 @@ createApp({
         }
         gCtx.fill();
         gCtx.fillStyle = dark ? '#e2e8f0' : '#1e1e2e';
-        gCtx.font = '600 12px -apple-system, "PingFang SC", sans-serif';
         gCtx.textAlign = 'center';
         gCtx.textBaseline = 'middle';
         gCtx.fillText(n.label, n.x, labelY);
@@ -1128,13 +1187,10 @@ createApp({
         const showLabel = isHovered || parentHovered;
         const labelMax = showLabel ? 25 : 12;
         const label = n.label.length > labelMax ? n.label.slice(0, labelMax) + '..' : n.label;
-        // 中文字符宽度约为拉丁的2倍，粗略估算
-        const cjkCount = (label.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
-        const latinCount = label.length - cjkCount;
-        const charW = showLabel ? 7 : 6;
-        const lw = (cjkCount * charW + latinCount * charW * 0.55) + 10;
         const lh = showLabel ? 18 : 15, ly = n.y + r + (showLabel ? 8 : 5);
         const labelAlpha = showLabel ? 0.9 : 0.55;
+        gCtx.font = `${showLabel ? 10 : 8.5}px -apple-system, "PingFang SC", sans-serif`;
+        const lw = gCtx.measureText(label).width + 10;
         gCtx.fillStyle = dark ? `rgba(20,20,30,${0.7 * labelAlpha})` : `rgba(255,255,255,${0.8 * labelAlpha})`;
         gCtx.beginPath();
         if (gCtx.roundRect) {
@@ -1144,7 +1200,6 @@ createApp({
         }
         gCtx.fill();
         gCtx.fillStyle = dark ? `rgba(226,232,240,${0.55 * labelAlpha})` : `rgba(30,30,46,${0.5 * labelAlpha})`;
-        gCtx.font = `${showLabel ? 10 : 8.5}px -apple-system, "PingFang SC", sans-serif`;
         gCtx.textAlign = 'center';
         gCtx.textBaseline = 'middle';
         gCtx.fillText(label, n.x, ly);
@@ -1177,10 +1232,9 @@ createApp({
         gCtx.stroke();
         // 全名标签（不截断）
         const label = n.label;
-        const cjkC = (label.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
-        const latinC = label.length - cjkC;
-        const lw = (cjkC * 7.5 + latinC * 4.2) + 16;
         const lh = 20, ly = n.y + r + 10;
+        gCtx.font = '600 12px -apple-system, "PingFang SC", sans-serif';
+        const lw = gCtx.measureText(label).width + 16;
         gCtx.fillStyle = dark ? 'rgba(20,20,30,0.92)' : 'rgba(255,255,255,0.95)';
         gCtx.beginPath();
         if (gCtx.roundRect) {
@@ -1190,7 +1244,6 @@ createApp({
         }
         gCtx.fill();
         gCtx.fillStyle = dark ? '#f1f5f9' : '#1e1e2e';
-        gCtx.font = '600 12px -apple-system, "PingFang SC", sans-serif';
         gCtx.textAlign = 'center';
         gCtx.textBaseline = 'middle';
         gCtx.fillText(label, n.x, ly);
@@ -1259,8 +1312,9 @@ createApp({
         for (const [set, maxLen, fontSize, yOff] of [[hop2, 5, 9, 18], [hop1, 8, 10, 16]]) {
           for (const node of set) {
             const txt = node.label.length > maxLen ? node.label.slice(0, maxLen) + '..' : node.label;
-            const lw = txt.length * fontSize * 0.55 + 8;
             const ly = node.y + node.radius + yOff;
+            gCtx.font = `${fontSize}px -apple-system, "PingFang SC", sans-serif`;
+            const lw = gCtx.measureText(txt).width + 10;
             gCtx.fillStyle = dark2 ? 'rgba(20,20,30,0.7)' : 'rgba(255,255,255,0.75)';
             gCtx.beginPath();
             if (gCtx.roundRect) {
@@ -1270,7 +1324,6 @@ createApp({
             }
             gCtx.fill();
             gCtx.fillStyle = dark2 ? 'rgba(226,232,240,0.7)' : 'rgba(30,30,46,0.65)';
-            gCtx.font = `${fontSize}px -apple-system, "PingFang SC", sans-serif`;
             gCtx.textAlign = 'center';
             gCtx.textBaseline = 'middle';
             gCtx.fillText(txt, node.x, ly - 1);
@@ -1318,9 +1371,13 @@ createApp({
       if (!graphCanvas.value || !graphCanvasWrap.value) return;
       const wrap = graphCanvasWrap.value;
       const canvas = graphCanvas.value;
-      gDPR = window.devicePixelRatio || 1;
-      canvas.width = wrap.clientWidth * gDPR;
-      canvas.height = wrap.clientHeight * gDPR;
+      const rawDPR = window.devicePixelRatio || 1;
+      gDPR = Math.ceil(rawDPR) * 2; // 2x 超采样，曲线/文字更平滑
+      const cw = wrap.clientWidth, ch = wrap.clientHeight;
+      canvas.width = cw * gDPR;
+      canvas.height = ch * gDPR;
+      canvas.style.width = cw + 'px';
+      canvas.style.height = ch + 'px';
       gCtx = canvas.getContext('2d');
       gScale = 1; gOffX = 0; gOffY = 0; gFocused = null;
       buildGraph();
@@ -1328,6 +1385,15 @@ createApp({
       graphZoom.value = gScale;
       if (gAnimId) cancelAnimationFrame(gAnimId);
       gAnimId = requestAnimationFrame(graphLoop);
+      // 自动监听容器大小变化
+      if (window._graphResizeObserver) window._graphResizeObserver.disconnect();
+      window._graphResizeObserver = new ResizeObserver(() => {
+        resizeGraph();
+        buildGraph();
+        autoFitGraph();
+        graphZoom.value = gScale;
+      });
+      window._graphResizeObserver.observe(wrap);
     }
 
     function autoFitGraph() {
@@ -1500,9 +1566,14 @@ createApp({
     function resizeGraph() {
       if (!graphCanvas.value || !graphCanvasWrap.value) return;
       const wrap = graphCanvasWrap.value;
-      gDPR = window.devicePixelRatio || 1;
-      graphCanvas.value.width = wrap.clientWidth * gDPR;
-      graphCanvas.value.height = wrap.clientHeight * gDPR;
+      const canvas = graphCanvas.value;
+      const rawDPR = window.devicePixelRatio || 1;
+      gDPR = Math.ceil(rawDPR) * 2;
+      const cw = wrap.clientWidth, ch = wrap.clientHeight;
+      canvas.width = cw * gDPR;
+      canvas.height = ch * gDPR;
+      canvas.style.width = cw + 'px';
+      canvas.style.height = ch + 'px';
     }
 
     function toggleTagFilter(tagId) {
@@ -1828,7 +1899,6 @@ createApp({
         loadTasks();
       }
     });
-
     // ==================== 任务操作 ====================
     function openQuickAdd() {
       Object.assign(newTask, {
@@ -1870,6 +1940,8 @@ createApp({
       showQuickAdd.value = false;
       await loadTasks();
       selectTask(id.id);
+      // 自动触发 AI 分析
+      analyzeTaskProgress(id.id);
     }
 
     function toggleNewTaskTag(tagId) {
@@ -2122,6 +2194,8 @@ createApp({
     // 通用笔记卡片
     async function loadNoteCards() {
       noteCards.value = await api('/api/note-cards');
+      await nextTick();
+      applyCardMinSizes();
     }
     async function createCard() {
       const text = newCardText.value.trim();
@@ -2166,39 +2240,106 @@ createApp({
         addItem(cardId, lastTopLevel?.id || null);
       }
     }
-    // 笔记条目拖拽排序
+    // 笔记条目拖拽排序（mousedown/move/up，不用 HTML5 Drag API）
     let gDragCardId = null, gDragItemId = null;
-    function onNoteDragStart(e, cardId, itemId) {
-      gDragCardId = cardId; gDragItemId = itemId;
+    let gDragClone = null;      // 拖拽时显示的浮动克隆
+    let gDragStartY = 0;        // mousedown 位置
+    let gDragCurY = 0;          // 当前鼠标 Y
+
+    function onNoteHandleDown(e, cardId, itemId) {
+      if (e.button !== 0) return; // 只响应左键
+      e.preventDefault();
       gNoteDragged = true;
-      e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/plain', String(itemId));
-      e.target.classList.add('dragging');
+      gDragCardId = cardId;
+      gDragItemId = itemId;
+      gDragStartY = e.clientY;
+      gDragCurY = e.clientY;
+      const sourceItem = e.currentTarget.closest('.note-item');
+      if (!sourceItem) return;
+      sourceItem.classList.add('dragging');
+      // 创建浮动克隆
+      gDragClone = sourceItem.cloneNode(true);
+      gDragClone.classList.add('note-drag-clone');
+      gDragClone.classList.remove('dragging', 'drag-over-top', 'drag-over-bottom');
+      const sr = sourceItem.getBoundingClientRect();
+      gDragClone.style.cssText = `position:fixed;left:${sr.left}px;top:${sr.top}px;width:${sr.width}px;z-index:9999;pointer-events:none;opacity:0.92;box-shadow:0 4px 20px rgba(0,0,0,0.15);transform:rotate(1deg);`;
+      document.body.appendChild(gDragClone);
+      document.addEventListener('mousemove', onNoteMouseMove);
+      document.addEventListener('mouseup', onNoteMouseUp);
     }
-    function onNoteDragOver(e, cardId, itemId) {
-      e.dataTransfer.dropEffect = 'move';
-      e.target.closest('.note-item')?.classList.add('drag-over');
-    }
-    function onNoteDrop(e, cardId, targetId) {
-      e.target.closest('.note-item')?.classList.remove('drag-over');
-      if (!gDragItemId || gDragItemId === targetId || gDragCardId !== cardId) return;
-      reorderNoteItems(cardId, gDragItemId, targetId);
-    }
-    function onNoteDragEnd(e) {
-      gDragCardId = null; gDragItemId = null;
-      document.querySelectorAll('.note-item.dragging, .note-item.drag-over').forEach(el => {
-        el.classList.remove('dragging', 'drag-over');
+
+    function onNoteMouseMove(e) {
+      if (!gDragClone) return;
+      gDragCurY = e.clientY;
+      const dy = e.clientY - gDragStartY;
+      const sr = document.querySelector(`.note-item[data-item-id="${gDragItemId}"]`);
+      const sw = sr ? sr.getBoundingClientRect().width : 200;
+      gDragClone.style.left = (parseFloat(gDragClone.style.left) || 0) + 'px';
+      gDragClone.style.top = (e.clientY - 16) + 'px';
+      // 清除所有指示器
+      document.querySelectorAll('.note-item.drag-over-top, .note-item.drag-over-bottom').forEach(el => {
+        el.classList.remove('drag-over-top', 'drag-over-bottom');
       });
+      // 找到光标下方的目标条目
+      const container = document.querySelector(`.note-items[data-card-id="${gDragCardId}"]`);
+      if (!container) return;
+      const items = [...container.querySelectorAll('.note-item:not(.dragging)')];
+      const target = items.find(el => {
+        const r = el.getBoundingClientRect();
+        return e.clientY >= r.top && e.clientY <= r.bottom;
+      });
+      if (target) {
+        const r = target.getBoundingClientRect();
+        target.classList.add(e.clientY < r.top + r.height / 2 ? 'drag-over-top' : 'drag-over-bottom');
+      }
     }
-    async function reorderNoteItems(cardId, fromId, toId) {
+
+    function onNoteMouseUp(e) {
+      document.removeEventListener('mousemove', onNoteMouseMove);
+      document.removeEventListener('mouseup', onNoteMouseUp);
+      if (gDragClone) { gDragClone.remove(); gDragClone = null; }
+      const container = document.querySelector(`.note-items[data-card-id="${gDragCardId}"]`);
+      if (!container || !gDragItemId || !gDragCardId) { gNoteDragged = false; gDragCardId = null; gDragItemId = null; return; }
+      // 清除指示器
+      const allItems = [...container.querySelectorAll('.note-item')];
+      allItems.forEach(el => el.classList.remove('dragging', 'drag-over-top', 'drag-over-bottom'));
+      // 找到光标下方或最近的目标条目
+      const candidates = allItems.filter(el => parseInt(el.dataset.itemId) !== gDragItemId);
+      let target = candidates.find(el => {
+        const r = el.getBoundingClientRect();
+        return e.clientY >= r.top && e.clientY <= r.bottom;
+      });
+      if (!target) {
+        let best = null, bestDist = Infinity;
+        candidates.forEach(el => {
+          const r = el.getBoundingClientRect();
+          const dist = Math.abs(e.clientY - (r.top + r.bottom) / 2);
+          if (dist < bestDist) { bestDist = dist; best = el; }
+        });
+        target = best;
+      }
+      if (target) {
+        const targetId = parseInt(target.dataset.itemId);
+        const r = target.getBoundingClientRect();
+        if (targetId && targetId !== gDragItemId) {
+          reorderNoteItems(gDragCardId, gDragItemId, targetId, e.clientY >= r.top + r.height / 2);
+        }
+      }
+      gNoteDragged = false;
+      gDragCardId = null;
+      gDragItemId = null;
+    }
+
+    async function reorderNoteItems(cardId, fromId, toId, after) {
       const card = noteCards.value.find(c => c.id === cardId);
       if (!card) return;
       const items = [...card.items];
       const fromIdx = items.findIndex(it => it.id === fromId);
-      const toIdx = items.findIndex(it => it.id === toId);
-      if (fromIdx < 0 || toIdx < 0) return;
-      // 重新计算 sort_order
+      if (fromIdx < 0) return;
       const moved = items.splice(fromIdx, 1)[0];
+      let toIdx = items.findIndex(it => it.id === toId);
+      if (toIdx < 0) return;
+      if (after) toIdx++;
       items.splice(toIdx, 0, moved);
       const updates = items.map((it, i) => ({ id: it.id, sort_order: i }));
       await api('/api/note-items/reorder', { method: 'PUT', body: { items: updates } });
@@ -3318,6 +3459,8 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
 
     // 启动定时刷新计时器显示
     onMounted(async () => {
+      loadCardSizes();
+      window.addEventListener('beforeunload', saveCardSizesFromDOM);
       document.addEventListener('keydown', handleKeydown);
       document.addEventListener('click', (e) => {
         if (!e.target.closest('.emoji-pick-btn') && !e.target.closest('.emoji-grid')) {
@@ -3353,8 +3496,12 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         if (selectedTask.value?.id === taskId) {
           selectedTask.value = await api(`/api/tasks/${taskId}`);
         }
+        // Show feedback if analysis is empty or error
+        if (!result.progress || result.progress.startsWith('分析失败') || result.progress.startsWith('请先配置')) {
+          alert(result.progress || '分析完成，但无内容（任务可能没有关联目录）');
+        }
       } catch (e) {
-        // ignore
+        alert('AI 分析请求失败: ' + (e.message || '网络错误'));
       }
       analyzingTaskId.value = null;
     }
@@ -3605,11 +3752,11 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       triggerFileInput, handleFileDrop, handleFileSelect,
       deleteAttachment, openAttachment, openFolder, openWithEditor,
       quickNote, appendingNote, appendToReadme,
-      noteCards, newCardText, newCardCategory, filterNoteCategory, newItemTexts, editingItemId,
+      noteCards, cardSizes, newCardText, newCardCategory, filterNoteCategory, newItemTexts, editingItemId,
       NOTE_CATEGORIES, filteredNoteCards,
       loadNoteCards, createCard, renameCard, updateCardCategory, cycleCardCategory, deleteCard,
       addItem, updateItem, deleteItem, handleNoteKeydown,
-      onNoteDragStart, onNoteDragOver, onNoteDrop, onNoteDragEnd,
+      onNoteHandleDown,
       renderItemContent, copyItemContent, onNoteClick, startEditItem, saveEditItem, cancelEditItem, handleNotePaste, openNotePath,
       unlinkFolder,
       saveGoal, editGoal, archiveGoal, loadGoalStats, goalProgress,

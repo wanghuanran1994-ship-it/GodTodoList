@@ -1067,6 +1067,13 @@ function reorderNoteItem(id, sortOrder) {
   save();
 }
 
+function reorderNoteCards(items) {
+  for (const it of items) {
+    db.run('UPDATE note_cards SET sort_order = ? WHERE id = ?', [it.sort_order, it.id]);
+  }
+  save();
+}
+
 function deleteNoteItem(id) {
   db.run('DELETE FROM note_items WHERE id = ?', [id]);
   save();
@@ -1119,6 +1126,6 @@ module.exports = {
   toggleToday, getTodayTasks,
   getConversations, getConversation, addConversation, deleteConversation,
   getNoteCards, createNoteCard, updateNoteCard, deleteNoteCard,
-  addNoteItem, updateNoteItem, deleteNoteItem,
+  addNoteItem, updateNoteItem, reorderNoteItem, deleteNoteItem, reorderNoteCards,
   getReports, saveReport, deleteReport, getReportMeetings,
 };
