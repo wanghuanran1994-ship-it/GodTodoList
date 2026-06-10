@@ -53,9 +53,17 @@ function writeTaskReadme(task, goals, routines, tags) {
     ? task.tags.map(t => typeof t === 'string' ? t : t.name).filter(Boolean)
     : (task.tag_ids || []).map(id => tags ? tags.find(t => t.id === id) : null).filter(Boolean).map(t => t.name);
 
+  // 采集所有关联目录
+  let allPaths = [];
+  try { allPaths = JSON.parse(task.paths || '[]'); } catch (e) {}
+  if (task.folder_path && !allPaths.includes(task.folder_path)) {
+    allPaths.unshift(task.folder_path);
+  }
+
   const frontmatter = {
     task_id: task.id,
     title: task.title || '',
+    description: task.description || '',
     status: task.status || 'todo',
     goal: goalObj ? goalObj.name : '',
     routine: routineObj ? routineObj.name : '',
@@ -64,6 +72,10 @@ function writeTaskReadme(task, goals, routines, tags) {
     actual_time: task.actual_time || 0,
     people: (task.people || []).map(p => typeof p === 'string' ? p : p.name).filter(Boolean),
     tags: taskTags,
+    paths: allPaths,
+    context: task.context || '',
+    is_today: task.is_today ? true : false,
+    parent_task_id: task.parent_task_id || null,
     created_at: task.created_at || '',
     updated_at: new Date().toISOString(),
   };
@@ -77,15 +89,19 @@ function writeTaskReadme(task, goals, routines, tags) {
         fmBlock += `${k}:\n`;
         v.forEach(item => { fmBlock += `  - ${item}\n`; });
       }
+    } else if (v === null) {
+      fmBlock += `${k}: \n`;
+    } else if (typeof v === 'boolean') {
+      fmBlock += `${k}: ${v}\n`;
     } else {
       fmBlock += `${k}: ${v}\n`;
     }
   }
   fmBlock += '---\n';
 
-  // 如果已有 README，保留 frontmatter 之外的全部内容
-  let body = '';
+  // 如果已有 README，保留原有正文
   if (fs.existsSync(readmePath)) {
+    let body = '';
     try {
       const old = fs.readFileSync(readmePath, 'utf-8');
       // 提取原有 frontmatter 之后的内容
@@ -97,16 +113,87 @@ function writeTaskReadme(task, goals, routines, tags) {
         body = old;
       }
     } catch (e) { /* ignore */ }
-  } else {
-    // 新 README，填入描述和背景
-    body += `# ${task.title || '任务'}\n\n`;
-    if (task.description) {
-      body += `## 描述\n\n${task.description}\n\n`;
+    try {
+      fs.writeFileSync(readmePath, fmBlock + body, 'utf-8');
+    } catch (e) {
+      console.error('写 README 失败:', e.message);
     }
-    if (task.context) {
-      body += `## 背景\n\n${task.context}\n\n`;
-    }
+    return;
   }
+
+  // 新 README：生成 AI 友好的全面介绍
+  const statusMap = { todo: '待办', 'in-progress': '进行中', done: '已完成', shelved: '搁置' };
+  const now = new Date();
+  let body = '';
+
+  // 标题 + 状态
+  body += `# ${task.title || '任务'}\n\n`;
+  body += `> **状态**：${statusMap[task.status] || task.status}`;
+  if (goalObj) body += `  |  **目标**：${goalObj.name}`;
+  if (routineObj) body += `  |  **惯例**：${routineObj.name}`;
+  body += '\n\n';
+
+  // 概述
+  body += '---\n\n';
+  body += '## 📋 概述\n\n';
+  body += `${task.description || '（待补充）'}\n\n`;
+
+  // 背景 / 需求
+  if (task.context) {
+    body += '## 📝 背景与需求\n\n';
+    body += `${task.context}\n\n`;
+  }
+
+  // 目录结构
+  if (allPaths.length > 0) {
+    body += '## 📂 关联目录\n\n';
+    for (const p of allPaths) {
+      const exists = fs.existsSync(p);
+      body += `- ${exists ? '✅' : '⚠️'} \`${p}\`\n`;
+    }
+    body += '\n';
+  }
+
+  // 进展
+  body += '## 📊 进展\n\n';
+  body += `- **状态**：${statusMap[task.status] || task.status}\n`;
+  body += `- **预估工时**：${task.estimated_time || 0} 分钟\n`;
+  body += `- **实际耗时**：${task.actual_time || 0} 分钟\n`;
+  if (task.ai_progress) {
+    body += `\n### AI 进度分析\n\n${task.ai_progress}\n`;
+  }
+  body += '\n';
+
+  // 相关人员
+  const people = (task.people || []).map(p => typeof p === 'string' ? p : p.name).filter(Boolean);
+  if (people.length > 0) {
+    body += '## 👤 相关人员\n\n';
+    for (const p of people) {
+      body += `- ${p}\n`;
+    }
+    body += '\n';
+  }
+
+  // 关键时间
+  body += '## ⏰ 时间线\n\n';
+  body += `- **创建**：${task.created_at || '未知'}\n`;
+  if (task.due_date) {
+    const dueDate = new Date(task.due_date);
+    const remainingDays = Math.ceil((dueDate - now) / 86400000);
+    body += `- **截止**：${task.due_date}（${remainingDays > 0 ? `剩余 ${remainingDays} 天` : '已过期'}）\n`;
+  }
+  body += `- **更新**：${frontmatter.updated_at}\n`;
+  body += '\n';
+
+  // 标签
+  if (taskTags.length > 0) {
+    body += '## 🔖 标签\n\n';
+    body += taskTags.map(t => `\`${t}\``).join('  ') + '\n\n';
+  }
+
+  // 底部：供 AI 导入的提示
+  body += '---\n\n';
+  body += '> 此文件由 GodTodoList 自动维护。上方 YAML frontmatter 包含完整的任务元数据，可供 AI 解析并重建任务。正文为人类和 AI 提供快速理解任务所需的所有上下文。\n';
 
   try {
     fs.writeFileSync(readmePath, fmBlock + body, 'utf-8');
@@ -143,7 +230,7 @@ function parseReadme(filePath) {
       currentArrayKey = null;
       if (val === '[]') {
         fm[key] = [];
-      } else if (val === '' && (key === 'people' || key === 'tags')) {
+      } else if (val === '' && (key === 'people' || key === 'tags' || key === 'paths')) {
         fm[key] = [];
         currentArrayKey = key;
       } else {
@@ -179,8 +266,11 @@ function parseReadme(filePath) {
     people: Array.isArray(fm.people) ? fm.people : [],
     tags: Array.isArray(fm.tags) ? fm.tags : [],
     task_id: fm.task_id ? parseInt(fm.task_id) : null,
-    description,
-    context,
+    description: description || fm.description || '',
+    context: context || fm.context || '',
+    paths: Array.isArray(fm.paths) ? fm.paths : [],
+    is_today: fm.is_today === 'true' || fm.is_today === true,
+    parent_task_id: fm.parent_task_id ? parseInt(fm.parent_task_id) : null,
     folder_path: path.dirname(filePath),
   };
 }
