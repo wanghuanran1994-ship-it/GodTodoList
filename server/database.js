@@ -159,6 +159,7 @@ function createTables() {
   try { db.run('ALTER TABLE goals ADD COLUMN target_date TEXT'); } catch (e) {}
   try { db.run('ALTER TABLE tasks ADD COLUMN ai_progress TEXT DEFAULT ""'); } catch (e) {}
   try { db.run('ALTER TABLE tasks ADD COLUMN is_report INTEGER DEFAULT 0'); } catch (e) {}
+  try { db.run('ALTER TABLE tasks ADD COLUMN sort_order REAL DEFAULT 0'); } catch (e) {}
   try { db.run('ALTER TABLE tasks ADD COLUMN report_meeting TEXT DEFAULT ""'); } catch (e) {}
   try { db.run('ALTER TABLE routines ADD COLUMN is_report INTEGER DEFAULT 0'); } catch (e) {}
   try { db.run('ALTER TABLE routines ADD COLUMN report_meeting TEXT DEFAULT ""'); } catch (e) {}
@@ -525,7 +526,7 @@ function getTasks(filters = {}) {
     sql += ' AND is_report = 1';
   }
 
-  sql += ' ORDER BY created_at DESC';
+  sql += ' ORDER BY sort_order, created_at DESC';
   const tasks = queryAll(sql, params);
   if (!tasks.length) return [];
 
@@ -667,7 +668,7 @@ function createTask(d) {
 }
 
 function updateTask(id, d) {
-  const allowed = ['title', 'description', 'context', 'goal_id', 'routine_id', 'status', 'estimated_time', 'actual_time', 'folder_path', 'due_date', 'completed_at', 'is_today', 'parent_task_id', 'paths', 'ai_progress', 'is_report', 'report_meeting'];
+  const allowed = ['title', 'description', 'context', 'goal_id', 'routine_id', 'status', 'estimated_time', 'actual_time', 'folder_path', 'due_date', 'completed_at', 'is_today', 'parent_task_id', 'paths', 'ai_progress', 'is_report', 'report_meeting', 'sort_order'];
   const fields = [];
   const params = [];
   for (const [k, v] of Object.entries(d)) {

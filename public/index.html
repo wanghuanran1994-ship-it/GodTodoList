@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GodTodoList - 事项管理体系</title>
-  <link rel="stylesheet" href="/css/style.css?v=13">
+  <link rel="stylesheet" href="/css/style.css?v=14">
 </head>
 <body>
   <div id="app">
@@ -317,9 +317,12 @@
             </div>
             <div class="kanban-column-body">
               <div class="task-card" v-for="task in col.tasks" :key="task.id"
-                   :class="{ 'selected': selectedTaskId === task.id, 'status-done': task.status === 'done', 'status-shelved': task.status === 'shelved' }"
+                   :class="{ 'selected': selectedTaskId === task.id, 'status-done': task.status === 'done', 'status-shelved': task.status === 'shelved', 'drag-over-before': kanbanDragOverTaskId === task.id && kanbanDropPosition === 'before', 'drag-over-after': kanbanDragOverTaskId === task.id && kanbanDropPosition === 'after' }"
                    draggable="true"
                    @dragstart="onKanbanDragStart($event, task)"
+                   @dragover.prevent.stop="onKanbanCardDragOver($event, task)"
+                   @dragleave="onKanbanCardDragLeave($event, task)"
+                   @drop.stop="onKanbanCardDrop($event, col, task)"
                    @click="selectTask(task.id)">
                 <div class="task-card-header">
                   <div class="task-card-left">
@@ -1694,6 +1697,6 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
-  <script src="/js/app.js?v=16"></script>
+  <script src="/js/app.js?v=17"></script>
 </body>
 </html>

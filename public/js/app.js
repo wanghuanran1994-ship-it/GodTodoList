@@ -29,6 +29,8 @@ createApp({
 
     // 看板拖拽
     const kanbanDragOver = ref(null);
+    const kanbanDragOverTaskId = ref(null);
+    const kanbanDropPosition = ref('after'); // 'before' | 'after'
     const kanbanColumns = computed(() => {
       const cols = [
         { status: 'active', label: '正在进行', tasks: [] },
@@ -122,19 +124,79 @@ createApp({
       if (kanbanDragOver.value === status) kanbanDragOver.value = null;
     }
 
-    async function onKanbanDrop(e, status) {
+    function onKanbanCardDragOver(e, task) {
       kanbanDragOver.value = null;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const midY = rect.top + rect.height / 2;
+      kanbanDragOverTaskId.value = task.id;
+      kanbanDropPosition.value = e.clientY < midY ? 'before' : 'after';
+    }
+
+    function onKanbanCardDragLeave(e, task) {
+      if (kanbanDragOverTaskId.value === task.id) {
+        kanbanDragOverTaskId.value = null;
+      }
+    }
+
+    function getStatusGroup(s) { return (s === 'todo' || s === 'in-progress') ? 'active' : s; }
+
+    async function onKanbanCardDrop(e, col, targetTask) {
+      e.preventDefault();
       const taskId = parseInt(e.dataTransfer.getData('text/plain'));
-      if (!taskId) return;
+      clearKanbanDrag();
+      if (!taskId || taskId === targetTask.id) return;
       const task = tasks.value.find(t => t.id === taskId);
-      // Map virtual 'active' column to 'in-progress'
-      const targetStatus = status === 'active' ? 'in-progress' : status;
-      if (!task || task.status === targetStatus) return;
-      await api(`/api/tasks/${taskId}`, { method: 'PUT', body: { status: targetStatus } });
+      if (!task) return;
+
+      const colTasks = col.tasks;
+      const targetIndex = colTasks.findIndex(t => t.id === targetTask.id);
+      if (targetIndex < 0) return;
+
+      // calculate sort_order between neighbors
+      const prevSort = targetIndex > 0 ? (colTasks[targetIndex - 1].sort_order || 0) : null;
+      const nextSort = targetIndex < colTasks.length - 1 ? (colTasks[targetIndex + 1].sort_order || 0) : null;
+      const targetSort = targetTask.sort_order || 0;
+
+      let newSortOrder;
+      if (kanbanDropPosition.value === 'before') {
+        newSortOrder = prevSort != null ? (targetSort + prevSort) / 2 : targetSort - 1;
+      } else {
+        newSortOrder = nextSort != null ? (targetSort + nextSort) / 2 : targetSort + 1;
+      }
+
+      const sameGroup = getStatusGroup(task.status) === getStatusGroup(targetTask.status);
+      const body = { sort_order: newSortOrder };
+      if (!sameGroup) {
+        body.status = col.status === 'active' ? 'in-progress' : col.status;
+      }
+      await api(`/api/tasks/${taskId}`, { method: 'PUT', body });
       await loadTasks();
       if (selectedTask.value?.id === taskId) {
         selectedTask.value = await api(`/api/tasks/${taskId}`);
       }
+    }
+
+    async function onKanbanDrop(e, status) {
+      // drop on empty column area
+      const taskId = parseInt(e.dataTransfer.getData('text/plain'));
+      clearKanbanDrag();
+      if (!taskId) return;
+      const task = tasks.value.find(t => t.id === taskId);
+      const targetStatus = status === 'active' ? 'in-progress' : status;
+      if (!task || task.status === targetStatus) return;
+      // put at top of target column
+      const colTasks = kanbanColumns.value.find(c => c.status === status)?.tasks || [];
+      const topSort = colTasks.length > 0 ? (colTasks[0].sort_order || 0) - 1 : 0;
+      await api(`/api/tasks/${taskId}`, { method: 'PUT', body: { status: targetStatus, sort_order: topSort } });
+      await loadTasks();
+      if (selectedTask.value?.id === taskId) {
+        selectedTask.value = await api(`/api/tasks/${taskId}`);
+      }
+    }
+
+    function clearKanbanDrag() {
+      kanbanDragOver.value = null;
+      kanbanDragOverTaskId.value = null;
     }
 
     // 弹窗
@@ -3802,15 +3864,14 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       // Copy
       copyTask, analyzeTaskProgress,
       // Kanban
-      kanbanDragOver, kanbanColumns,
+      kanbanDragOver, kanbanDragOverTaskId, kanbanDropPosition, kanbanColumns,
+      onKanbanDragStart, onKanbanDragOver, onKanbanDragLeave, onKanbanCardDragOver, onKanbanCardDragLeave, onKanbanDrop, onKanbanCardDrop,
       // Batch
       batchMode, batchSelected, batchStatus, batchGoalId,
       toggleBatchSelect, applyBatchStatus, applyBatchGoal, batchToggleToday, batchDelete,
       settingsTab,
       // Subtask/parent helpers
       subtaskDoneCount, subtaskPercent, childTaskCount,
-      // Kanban drag
-      onKanbanDragStart, onKanbanDragOver, onKanbanDragLeave, onKanbanDrop,
       // Dashboard
       upcomingDeadlines, recentCompleted, pressureTasks, pressureAnalysis, analyzingPressure, analyzePressure, pressureChatMode, savePressureAnalysis,
       // Reports

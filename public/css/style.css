@@ -416,6 +416,18 @@ a { color: var(--primary); text-decoration: none; }
   background: var(--primary-light);
 }
 
+.task-card.drag-over-before {
+  border-top: 3px solid var(--primary);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.task-card.drag-over-after {
+  border-bottom: 3px solid var(--primary);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
 .kanban-column-header {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border-light);
