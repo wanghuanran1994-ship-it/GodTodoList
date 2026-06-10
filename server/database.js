@@ -8,6 +8,7 @@ const DB_FILE = path.join(DATA_DIR, 'godtodo.db');
 const JSON_FILE = path.join(DATA_DIR, 'db.json');
 
 let db = null;
+let SQLModule = null;
 
 function now() { return new Date().toISOString(); }
 
@@ -21,6 +22,7 @@ async function init() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
   const SQL = await initSqlJs();
+  SQLModule = SQL;
   if (fs.existsSync(DB_FILE)) {
     const buf = fs.readFileSync(DB_FILE);
     db = new SQL.Database(buf);
@@ -1105,8 +1107,16 @@ function getReportMeetings() {
     .map(r => r.report_meeting);
 }
 
+function reload() {
+  if (fs.existsSync(DB_FILE) && SQLModule) {
+    const buf = fs.readFileSync(DB_FILE);
+    try { db.close(); } catch (e) {}
+    db = new SQLModule.Database(buf);
+  }
+}
+
 module.exports = {
-  init, save,
+  init, save, reload,
   getSetting, setSetting, getAllSettings,
   getGoals, createGoal, updateGoal, deleteGoal,
   getRoutines, createRoutine, updateRoutine, deleteRoutine,

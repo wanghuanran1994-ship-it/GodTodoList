@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GodTodoList - 事项管理体系</title>
-  <link rel="stylesheet" href="/css/style.css?v=14">
+  <link rel="stylesheet" href="/css/style.css?v=23">
 </head>
 <body>
   <div id="app">
@@ -230,7 +230,7 @@
           <h1 class="view-title">任务</h1>
           <div class="header-actions">
             <button class="btn btn-primary" @click="openQuickAdd">＋ 新建</button>
-            <button class="btn btn-xs" :class="{ 'btn-primary': batchMode }" @click="batchMode = !batchMode; batchSelected = []" :title="batchMode ? '退出批量模式' : '批量操作'">☑</button>
+            <button class="btn" :class="{ 'btn-primary': batchMode }" @click="batchMode = !batchMode; batchSelected = []" :title="batchMode ? '退出批量模式' : '批量操作'">{{ batchMode ? '✓ 批量中' : '☑ 批量' }}</button>
             <div class="search-box">
               <span class="search-icon">🔍</span>
               <input type="text" v-model="searchQuery" placeholder="搜索任务..." @input="debounceSearch">
@@ -607,26 +607,34 @@
         </div>
 
         <div class="notes-content">
-          <!-- 快捷捕获栏 -->
-          <div class="notes-capture" :class="{ focused: newCardText }">
-            <select v-model="newCardCategory" class="notes-category-select">
-              <option v-for="cat in NOTE_CATEGORIES" :key="cat.key" :value="cat.key">{{ cat.icon }} {{ cat.key }}</option>
-            </select>
-            <div class="notes-capture-icon">💡</div>
-            <input type="text" v-model="newCardText" class="notes-capture-input"
-                   placeholder="记录想法、命令、链接... 回车创建卡片"
-                   @keyup.enter="createCard">
-          </div>
-
           <!-- 分类筛选 -->
           <div class="notes-filter" v-if="noteCards.length">
             <button class="notes-filter-btn" :class="{ active: filterNoteCategory === null }" @click="filterNoteCategory = null">全部</button>
             <button v-for="cat in NOTE_CATEGORIES" :key="cat.key"
                     class="notes-filter-btn"
-                    :class="{ active: filterNoteCategory === cat.key }"
-                    @click="filterNoteCategory = cat.key">
+                    :class="{ active: filterNoteCategory === cat.key, 'bubble-active': bubbleInput.visible && bubbleInput.categoryKey === cat.key }"
+                    :data-cat="cat.key"
+                    @click="filterNoteCategory = cat.key"
+                    @dblclick="showBubbleInput(cat.key, $event)">
               {{ cat.icon }} {{ cat.key }}
             </button>
+          </div>
+
+          <!-- 气泡快速输入 -->
+          <div class="bubble-overlay" v-if="bubbleInput.visible" @click="dismissBubbleInput">
+            <div class="bubble-input" :style="bubbleStyle" @click.stop>
+              <div class="bubble-input-tail"></div>
+              <div class="bubble-input-inner">
+                <span class="bubble-input-cat">{{ getCatByKey(bubbleInput.categoryKey)?.icon }} {{ bubbleInput.categoryKey }}</span>
+                <input type="text" v-model="bubbleInput.text"
+                       class="bubble-input-field"
+                       :placeholder="'记录想法到 ' + bubbleInput.categoryKey + '...'"
+                       ref="bubbleInputRef"
+                       @keyup.enter="submitBubbleInput"
+                       @keyup.esc="dismissBubbleInput">
+                <span class="bubble-input-hint">Enter 提交 · Esc 取消</span>
+              </div>
+            </div>
           </div>
 
           <!-- 卡片网格 -->
@@ -1433,11 +1441,23 @@
           <button class="btn-icon" @click="showQuickAdd = false">×</button>
         </div>
         <div class="modal-body quick-add-body">
-          <!-- 标题（全宽） -->
-          <div class="form-group" style="grid-column:1/-1;margin-bottom:8px">
+          <!-- 任务描述 + AI推理 -->
+          <div class="form-group" style="grid-column:1/-1">
+            <label>任务描述 <span class="hint-text">先描述，AI 推理自动填充下方属性</span></label>
+            <textarea v-model="newTask.description" class="input quick-add-desc"
+                      placeholder="用语音转文字或直接描述任务...&#10;例如：分析麒麟芯片CPU能效数据，对比竞品，输出能效曲线和优化建议"
+                      rows="3" ref="quickAddInput"></textarea>
+          </div>
+          <div style="grid-column:1/-1;margin-bottom:4px">
+            <button class="btn btn-sm" @click="aiInferQuickAdd" :disabled="aiInferringQuickAdd">
+              {{ aiInferringQuickAdd ? '⏳ 推理中...' : '🤖 AI 推理' }}
+            </button>
+          </div>
+          <!-- 任务名称（全宽） -->
+          <div class="form-group" style="grid-column:1/-1">
+            <label>任务名称</label>
             <input type="text" v-model="newTask.title" class="input input-lg"
-                   placeholder="任务名称" ref="quickAddInput"
-                   @keydown.enter="quickCreateTask" autofocus>
+                   placeholder="AI推理后自动填充，也可手动输入" @keydown.enter="quickCreateTask">
           </div>
           <!-- 左列 -->
           <div>
@@ -1449,12 +1469,12 @@
               </select>
             </div>
             <div class="form-group">
-              <label>截止日期</label>
-              <input type="date" v-model="newTask.due_date" class="input">
+              <label>预估时间(分)</label>
+              <input type="number" v-model.number="newTask.estimated_time" class="input" min="0" placeholder="0">
             </div>
             <div class="form-group">
-              <label>相关人（逗号分隔）</label>
-              <input type="text" v-model="newTask.people_str" class="input" placeholder="张三, 李四">
+              <label>相关人</label>
+              <input type="text" v-model="newTask.people_str" class="input" placeholder="张三, 李四（逗号分隔）">
             </div>
           </div>
           <!-- 右列 -->
@@ -1467,25 +1487,45 @@
               </select>
             </div>
             <div class="form-group">
-              <label>预估时间(分)</label>
-              <input type="number" v-model.number="newTask.estimated_time" class="input" min="0">
+              <label>截止日期 <span class="hint-text">默认一周</span></label>
+              <input type="date" v-model="newTask.due_date" class="input">
             </div>
-            <div class="form-group">
+            <!-- 文件夹 -->
+            <div class="form-group" v-if="!newTask.reuse_folder_path">
+              <label>📁 文件夹 <span class="hint-text">AI建议</span></label>
+              <div style="display:flex;gap:4px;align-items:center">
+                <input type="text" v-model="newTask.folder_name" class="input" placeholder="如 feature-analysis" style="flex:1">
+                <label class="toggle" :title="newTask.create_folder ? '创建文件夹' : '不创建'">
+                  <input type="checkbox" v-model="newTask.create_folder" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+                <button class="btn btn-xs" @click="quickAddPickFolder" title="选择已有目录">📂</button>
+              </div>
+            </div>
+            <div class="form-group" v-else>
+              <label>📁 使用已有目录</label>
+              <div style="font-size:var(--text-xs);color:var(--success);word-break:break-all;display:flex;align-items:center;gap:4px">
+                ✅ {{ newTask.reuse_folder_path }}
+                <button style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-3)" @click="newTask.reuse_folder_path = ''">× 清除</button>
+              </div>
+            </div>
+            <!-- 汇报 -->
+            <div class="form-group" style="margin-bottom:0">
               <label class="detail-checkbox">
                 <input type="checkbox" v-model="newTask.is_report"> 📊 这是汇报
               </label>
+              <input v-if="newTask.is_report" type="text" v-model="newTask.report_meeting" class="input" style="margin-top:4px"
+                     placeholder="汇报会议名称" list="report-meeting-list-q">
             </div>
-            <div class="form-group" v-if="newTask.is_report">
-              <label>汇报会议</label>
-              <input type="text" v-model="newTask.report_meeting" class="input"
-                     placeholder="如：部门周会" list="report-meeting-list-q">
-            </div>
-            <div class="form-group">
-              <label>创建文件夹</label>
-              <label class="toggle">
-                <input type="checkbox" v-model="newTask.create_folder" checked>
-                <span class="toggle-slider"></span>
-              </label>
+          </div>
+          <!-- 子任务（AI推理后展示，全宽） -->
+          <div class="form-group" style="grid-column:1/-1" v-if="newTask.subtasks && newTask.subtasks.length">
+            <label>子任务 (AI 建议)</label>
+            <div style="display:flex;flex-wrap:wrap;gap:4px">
+              <span class="ai-subtask-tag" v-for="(st, si) in newTask.subtasks" :key="si">
+                {{ st }}
+                <button class="btn-icon btn-xs" style="color:var(--text-3);margin-left:2px" @click="newTask.subtasks.splice(si, 1)" title="移除">×</button>
+              </span>
             </div>
           </div>
           <!-- 标签（全宽） -->
@@ -1503,7 +1543,7 @@
         </div>
         <div class="modal-footer">
           <button class="btn" @click="showQuickAdd = false">取消</button>
-          <button class="btn btn-primary" @click="quickCreateTask">创建</button>
+          <button class="btn btn-primary" @click="quickCreateTask" :disabled="!newTask.title.trim()">创建</button>
         </div>
       </div>
     </div>
@@ -1697,6 +1737,6 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
-  <script src="/js/app.js?v=17"></script>
+  <script src="/js/app.js?v=27"></script>
 </body>
 </html>

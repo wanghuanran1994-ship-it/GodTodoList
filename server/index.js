@@ -58,7 +58,11 @@ function readAIConfig() {
 }
 
 function writeAIConfig(data) {
-  fs.writeFileSync(AI_CONFIG_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  try {
+    fs.writeFileSync(AI_CONFIG_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('写入 AI 配置失败:', e.message);
+  }
 }
 
 // 设置键白名单（ai_configs/ai_active_config 存储在 data/ai-config.json，不经过 DB）
@@ -172,7 +176,8 @@ app.post('/api/tasks', (req, res) => {
 
   // 创建文件夹
   if (data.create_folder !== false) {
-    const folderPath = fm.createTaskFolder(task.id, task.title);
+    const folderName = data.folder_name || null;
+    const folderPath = fm.createTaskFolder(task.id, task.title, folderName);
     db.updateTask(task.id, { folder_path: folderPath });
     // 写 README
     const updated = db.getTask(task.id);
@@ -465,28 +470,42 @@ app.post('/api/open-with-editor', asyncHandler(async (req, res) => {
     fileToOpen = targetPath;
   }
 
-  let command;
-  if (safeEditor === 'obsidian') {
-    const dir = require('path').dirname(fileToOpen);
-    command = `open -a Obsidian "${shellEscape(dir)}"`;
-  } else if (safeEditor === 'typora') {
-    command = `open -a Typora "${shellEscape(fileToOpen)}"`;
-  } else if (safeEditor === 'vscode' || safeEditor === 'code') {
-    command = `open -a "Visual Studio Code" "${shellEscape(fileToOpen)}"`;
-  } else if (safeEditor === 'sublime') {
-    command = `open -a "Sublime Text" "${shellEscape(fileToOpen)}"`;
-  } else if (safeEditor === 'textedit') {
-    command = `open -a TextEdit "${shellEscape(fileToOpen)}"`;
-  } else if (safeEditor === 'terminal') {
-    command = `open "${shellEscape(fileToOpen)}"`;
+  const platform = process.platform;
+  if (platform === 'win32') {
+    let winCmd;
+    if (safeEditor === 'vscode' || safeEditor === 'code') {
+      winCmd = `code "${fileToOpen}"`;
+    } else if (safeEditor === 'obsidian') {
+      const dir = require('path').dirname(fileToOpen);
+      winCmd = `start "" "obsidian://open?path=${encodeURIComponent(dir)}"`;
+    } else {
+      // 其余编辑器用系统关联打开
+      winCmd = `start "" "${fileToOpen}"`;
+    }
+    exec(winCmd, (err) => { if (err) console.error('打开编辑器失败:', err); });
   } else {
-    // 兜底：默认用系统关联打开
-    command = `open "${shellEscape(fileToOpen)}"`;
+    let command;
+    if (safeEditor === 'obsidian') {
+      const dir = require('path').dirname(fileToOpen);
+      command = `open -a Obsidian "${shellEscape(dir)}"`;
+    } else if (safeEditor === 'typora') {
+      command = `open -a Typora "${shellEscape(fileToOpen)}"`;
+    } else if (safeEditor === 'vscode' || safeEditor === 'code') {
+      command = `open -a "Visual Studio Code" "${shellEscape(fileToOpen)}"`;
+    } else if (safeEditor === 'sublime') {
+      command = `open -a "Sublime Text" "${shellEscape(fileToOpen)}"`;
+    } else if (safeEditor === 'textedit') {
+      command = `open -a TextEdit "${shellEscape(fileToOpen)}"`;
+    } else if (safeEditor === 'terminal') {
+      command = `open "${shellEscape(fileToOpen)}"`;
+    } else {
+      // 兜底：默认用系统关联打开
+      command = `open "${shellEscape(fileToOpen)}"`;
+    }
+    exec(command, (err) => {
+      if (err) console.error('打开编辑器失败:', err);
+    });
   }
-
-  exec(command, (err) => {
-    if (err) console.error('打开编辑器失败:', err);
-  });
   res.json({ success: true });
 }));
 
@@ -688,7 +707,7 @@ app.post('/api/ai/decompose', (req, res) => {
   } else {
     const fullUrl = baseEndpoint.endsWith('/v1') ? baseEndpoint + '/chat/completions' : baseEndpoint + '/v1/chat/completions';
     const url = new URL(fullUrl);
-    postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], stream: false });
+    postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: 1024, stream: false });
     options = {
       hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'Authorization': `Bearer ${cfg.api_key}` },
@@ -700,6 +719,11 @@ app.post('/api/ai/decompose', (req, res) => {
     let body = '';
     proxyRes.on('data', chunk => body += chunk);
     proxyRes.on('end', () => {
+      if (proxyRes.statusCode >= 400) {
+        let errMsg = `AI 服务返回 ${proxyRes.statusCode}`;
+        try { const e = JSON.parse(body); errMsg = e.error?.message || e.message || e.error || errMsg; } catch (_) {}
+        return res.status(502).json({ error: errMsg });
+      }
       try {
         const json = JSON.parse(body);
         let text = '';
@@ -708,7 +732,7 @@ app.post('/api/ai/decompose', (req, res) => {
         } else {
           text = json.content || json.choices?.[0]?.message?.content || json.choices?.[0]?.text || '';
         }
-        const subtasks = text.split('\n').map(s => s.replace(/^[\d.\-*]+\s*/, '').trim()).filter(s => s.length > 1);
+        const subtasks = text.split('\n').map(s => s.replace(/^[\d.\-*]+\s*/, '').trim()).filter(s => s.length > 0);
         res.json({ subtasks });
       } catch (e) {
         res.status(502).json({ error: 'AI 解析失败' });
@@ -721,8 +745,9 @@ app.post('/api/ai/decompose', (req, res) => {
 });
 
 app.post('/api/ai/enrich', (req, res) => {
-  const { title } = req.body;
-  if (!title) return res.json({});
+  const { title, description } = req.body;
+  const input = description || title;
+  if (!input) return res.json({});
 
   const aiCfg = readAIConfig();
   const cfg = aiCfg.configs[aiCfg.activeConfig] || null;
@@ -734,7 +759,7 @@ app.post('/api/ai/enrich', (req, res) => {
   const tagList = allTags.map(t => t.name).join('、') || '无';
 
   const prompt = `你是一个项目管理助手。请根据用户输入，给出以下建议（JSON格式）：
-用户输入：${title}
+用户输入（任务描述）：${input}
 可选目标：${goalList}
 可选标签：${tagList}
 
@@ -766,7 +791,7 @@ app.post('/api/ai/enrich', (req, res) => {
   } else {
     const fullUrl = baseEndpoint2.endsWith('/v1') ? baseEndpoint2 + '/chat/completions' : baseEndpoint2 + '/v1/chat/completions';
     const url = new URL(fullUrl);
-    postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], stream: false });
+    postData = JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: 1024, stream: false });
     options = {
       hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'Authorization': `Bearer ${cfg.api_key}` },
@@ -778,6 +803,11 @@ app.post('/api/ai/enrich', (req, res) => {
     let body = '';
     proxyRes.on('data', chunk => body += chunk);
     proxyRes.on('end', () => {
+      if (proxyRes.statusCode >= 400) {
+        let errMsg = `AI 服务返回 ${proxyRes.statusCode}`;
+        try { const e = JSON.parse(body); errMsg = e.error?.message || e.message || e.error || errMsg; } catch (_) {}
+        return res.status(502).json({ error: errMsg });
+      }
       try {
         const json = JSON.parse(body);
         let text = '';
@@ -834,9 +864,14 @@ app.post('/api/restore', upload.single('file'), (req, res) => {
     const backupPath = dbPath + '.backup-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     try { fs.copyFileSync(dbPath, backupPath); } catch (e) { console.error('备份当前数据库失败:', e.message); }
   }
-  fs.copyFileSync(req.file.path, dbPath);
+  try {
+    fs.copyFileSync(req.file.path, dbPath);
+    db.reload();
+  } catch (e) {
+    return res.status(500).json({ error: '恢复失败: ' + e.message });
+  }
   try { fs.unlinkSync(req.file.path); } catch (e) {}
-  res.json({ success: true, message: '数据库已恢复，请重启服务' });
+  res.json({ success: true, message: '数据库已恢复' });
 });
 
 // ==================== Stats ====================
@@ -868,7 +903,13 @@ app.post('/api/launch-terminal', asyncHandler(async (req, res) => {
       if (terminalPath.toLowerCase() === 'cmd') {
         spawn('cmd', ['/c', `cd /d "${directory}" && start cmd`], { detached: true, stdio: 'ignore' }).unref();
       } else {
-        spawn('cmd', ['/c', 'start', '""', `"${terminalPath}"`], { detached: true, stdio: 'ignore' }).unref();
+        // Windows Terminal (wt.exe) 支持 -d，其他终端用 start /d
+        const termName = terminalPath.toLowerCase();
+        if (termName.includes('wt.exe') || termName.endsWith('wt')) {
+          spawn('cmd', ['/c', 'start', '""', '"wt.exe"', '-d', `"${directory}"`], { detached: true, stdio: 'ignore' }).unref();
+        } else {
+          spawn('cmd', ['/c', 'start', '""', '/d', `"${directory}"`, `"${terminalPath}"`], { detached: true, stdio: 'ignore' }).unref();
+        }
       }
     } else if (platform === 'darwin') {
       if (terminalPath && terminalPath !== 'Terminal') {
@@ -1028,7 +1069,7 @@ function proxyAnthropic(baseUrl, model, apiKey, xToken, allMessages, res) {
       }
     });
     proxyRes.on('end', () => {
-      // 处理 buffer 中剩余的数据
+      // 处理 buffer 中剩余的数据（可能包含最后的 content_block_delta）
       if (buffer.trim()) {
         const tl = buffer.trim();
         if (tl.startsWith('data:')) {
@@ -1036,7 +1077,10 @@ function proxyAnthropic(baseUrl, model, apiKey, xToken, allMessages, res) {
           if (raw && raw !== '[DONE]') {
             try {
               const evt = JSON.parse(raw);
-              if (evt.type === 'message_stop') {
+              if (evt.type === 'content_block_delta' && evt.delta?.text) {
+                res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: evt.delta.text } }] })}\n\n`);
+              }
+              if (evt.type === 'message_stop' || evt.type === 'content_block_delta') {
                 res.write('data: [DONE]\n\n');
               }
             } catch (e) {}
@@ -1180,7 +1224,7 @@ function aiChatSync(cfg, messages) {
     const base = cfg.base_url.replace(/\/+$/, '');
     if (provider === 'anthropic') {
       fullUrl = base.endsWith('/v1') ? base + '/messages' : base + '/v1/messages';
-      const systemContent = messages.find(m => m.role === 'system')?.content || '';
+      const systemContent = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
       const chatMessages = messages.filter(m => m.role !== 'system');
       postData = JSON.stringify({ model: cfg.model, system: systemContent, messages: chatMessages, max_tokens: 512, stream: false });
     } else {
@@ -1202,6 +1246,11 @@ function aiChatSync(cfg, messages) {
       let body = '';
       proxyRes.on('data', chunk => body += chunk);
       proxyRes.on('end', () => {
+        if (proxyRes.statusCode >= 400) {
+          let errMsg = `AI 服务返回 ${proxyRes.statusCode}`;
+          try { const e = JSON.parse(body); errMsg = e.error?.message || e.message || e.error || errMsg; } catch (_) {}
+          return reject(new Error(errMsg));
+        }
         try {
           const data = JSON.parse(body);
           if (provider === 'anthropic') {
@@ -1340,28 +1389,35 @@ app.post('/api/conversations/:id/continue', asyncHandler(async (req, res) => {
   const dir = conv.directory || '';
   const cwd = fs.existsSync(dir) ? dir : fm.getRootDir();
 
-  const safeCwd = cwd.replace(/'/g, "'\\''");
-  const safeSessionId = (conv.session_id || '').replace(/'/g, "'\\''");
-  let runCmd;
-  if (conv.tool === 'opencode') {
-    runCmd = `cd '${safeCwd}' && opencode --session '${safeSessionId}'`;
-  } else {
-    runCmd = `cd '${safeCwd}' && claude --resume '${safeSessionId}'`;
-  }
-
   const platform = process.platform;
+  let runCmd;
+  if (platform === 'win32') {
+    const safeCwdWin = `"${cwd.replace(/%/g, '%%')}"`;
+    const safeSessionWin = (conv.session_id || '').replace(/"/g, '""');
+    if (conv.tool === 'opencode') {
+      runCmd = `cd /d ${safeCwdWin} && opencode --session "${safeSessionWin}"`;
+    } else {
+      runCmd = `cd /d ${safeCwdWin} && claude --resume "${safeSessionWin}"`;
+    }
+    spawn('cmd', ['/c', 'start', 'cmd', '/k', runCmd], { detached: true, stdio: 'ignore' }).unref();
+  } else {
+    const safeCwd = cwd.replace(/'/g, "'\\''");
+    const safeSessionId = (conv.session_id || '').replace(/'/g, "'\\''");
+    if (conv.tool === 'opencode') {
+      runCmd = `cd '${safeCwd}' && opencode --session '${safeSessionId}'`;
+    } else {
+      runCmd = `cd '${safeCwd}' && claude --resume '${safeSessionId}'`;
+    }
   if (platform === 'darwin') {
-    // 写入临时脚本避免 osascript 转义问题
     const tmpScript = path.join(os.tmpdir(), `godtodo_continue_${Date.now()}.sh`);
     fs.writeFileSync(tmpScript, `#!/bin/bash\n${runCmd}\n`, { mode: 0o755 });
     exec(`osascript -e 'tell application "Terminal" to activate' -e 'tell application "Terminal" to do script "bash ${tmpScript.replace(/"/g, '\\"')}"'`);
-  } else if (platform === 'win32') {
-    spawn('cmd', ['/c', 'start', 'cmd', '/k', runCmd], { detached: true, stdio: 'ignore' }).unref();
   } else {
     spawn('x-terminal-emulator', ['-e', `bash -c "${runCmd}; exec bash"`], { detached: true, stdio: 'ignore' }).unref();
   }
 
   res.json({ success: true });
+  }
 }));
 
 app.post('/api/ai/chat', (req, res) => {
@@ -1492,7 +1548,7 @@ app.get('*', (req, res) => {
 
   dbReady = true;
 
-  app.listen(PORT, '127.0.0.1', () => {
+  const server = app.listen(PORT, '127.0.0.1', () => {
     console.log('');
     console.log('  ╔══════════════════════════════════════╗');
     console.log('  ║   🚀 GodTodoList 已启动              ║');
@@ -1511,5 +1567,13 @@ app.get('*', (req, res) => {
     } else {
       exec(`xdg-open "${url}"`);
     }
+  });
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`端口 ${PORT} 已被占用，请先关闭占用该端口的进程`);
+    } else {
+      console.error('服务器启动失败:', err.message);
+    }
+    process.exit(1);
   });
 })();

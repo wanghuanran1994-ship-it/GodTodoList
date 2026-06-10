@@ -177,17 +177,24 @@ createApp({
     }
 
     async function onKanbanDrop(e, status) {
-      // drop on empty column area
+      // drop on column area (empty space between cards)
       const taskId = parseInt(e.dataTransfer.getData('text/plain'));
       clearKanbanDrag();
       if (!taskId) return;
       const task = tasks.value.find(t => t.id === taskId);
+      if (!task) return;
       const targetStatus = status === 'active' ? 'in-progress' : status;
-      if (!task || task.status === targetStatus) return;
-      // put at top of target column
       const colTasks = kanbanColumns.value.find(c => c.status === status)?.tasks || [];
-      const topSort = colTasks.length > 0 ? (colTasks[0].sort_order || 0) - 1 : 0;
-      await api(`/api/tasks/${taskId}`, { method: 'PUT', body: { status: targetStatus, sort_order: topSort } });
+
+      if (task.status === targetStatus) {
+        // 同列拖拽到空隙：移到列末尾
+        const lastSort = colTasks.length > 0 ? (colTasks[colTasks.length - 1].sort_order || 0) + 1 : 0;
+        await api(`/api/tasks/${taskId}`, { method: 'PUT', body: { sort_order: lastSort } });
+      } else {
+        // 跨列拖拽：改状态，放到目标列顶部
+        const topSort = colTasks.length > 0 ? (colTasks[0].sort_order || 0) - 1 : 0;
+        await api(`/api/tasks/${taskId}`, { method: 'PUT', body: { status: targetStatus, sort_order: topSort } });
+      }
       await loadTasks();
       if (selectedTask.value?.id === taskId) {
         selectedTask.value = await api(`/api/tasks/${taskId}`);
@@ -216,9 +223,11 @@ createApp({
     // 新建任务
     const newTask = reactive({
       title: '', description: '', goal_id: null, routine_id: null,
-      tag_ids: [], due_date: '', estimated_time: 0,
+      tag_ids: [], due_date: new Date(Date.now() + 7*86400000).toISOString().slice(0, 10),
+      estimated_time: 0,
       people_str: '', create_folder: true,
       is_report: false, report_meeting: '',
+      folder_name: '', reuse_folder_path: '', subtasks: [],
     });
 
     // 标签管理
@@ -282,8 +291,6 @@ createApp({
     const noteConversations = reactive({});
 
     // 统计
-    const statsDays = ref(30);
-    const timeStats = ref([]);
     const goalStats = ref([]);
 
     // AI 进展分析
@@ -317,6 +324,57 @@ createApp({
     ];
     const noteCards = ref([]);
     const cardSizes = ref({});
+
+    // 气泡快速输入
+    const bubbleInput = reactive({ visible: false, categoryKey: '', text: '' });
+    const bubbleInputRef = ref(null);
+    const bubblePillRect = ref(null);
+
+    const bubbleStyle = computed(() => {
+      if (!bubblePillRect.value) return { display: 'none' };
+      const r = bubblePillRect.value;
+      return {
+        left: (r.left + r.width / 2) + 'px',
+        top: (r.bottom + 8) + 'px',
+        transform: 'translateX(-50%)',
+      };
+    });
+
+    function getCatByKey(key) {
+      return NOTE_CATEGORIES.find(c => c.key === key);
+    }
+
+    async function showBubbleInput(catKey, event) {
+      const el = event.currentTarget;
+      bubblePillRect.value = el ? el.getBoundingClientRect() : null;
+      bubbleInput.categoryKey = catKey;
+      bubbleInput.text = '';
+      bubbleInput.visible = true;
+      await nextTick();
+      if (bubbleInputRef.value) bubbleInputRef.value.focus();
+    }
+
+    async function submitBubbleInput() {
+      const text = bubbleInput.text.trim();
+      if (!text) return;
+      const catKey = bubbleInput.categoryKey;
+      // 找到该分类最新的卡片
+      const card = noteCards.value.find(c => (c.category || '随手记') === catKey);
+      if (card) {
+        await api(`/api/note-cards/${card.id}/items`, { method: 'POST', body: { content: text } });
+      } else {
+        // 没有该分类的卡片，创建一个
+        await api('/api/note-cards', { method: 'POST', body: { category: catKey, content: text } });
+      }
+      await loadNoteCards();
+      dismissBubbleInput();
+    }
+
+    function dismissBubbleInput() {
+      bubbleInput.visible = false;
+      bubbleInput.text = '';
+      bubblePillRect.value = null;
+    }
 
     function loadCardSizes() {
       try {
@@ -409,6 +467,7 @@ createApp({
     const quickInputText = ref('');
     const aiSuggestions = ref(null);
     const aiEnriching = ref(false);
+    const aiInferringQuickAdd = ref(false);
 
     // 周数 & 剩余天数
     function getISOWeek(d) {
@@ -1769,11 +1828,58 @@ createApp({
       aiEnriching.value = false;
     }
 
+    // AI 推理：从描述自动填充新建任务属性
+    async function aiInferQuickAdd() {
+      const desc = newTask.description || newTask.title;
+      if (!desc) return;
+      aiInferringQuickAdd.value = true;
+      try {
+        const result = await api('/api/ai/enrich', {
+          method: 'POST',
+          body: { description: desc }
+        });
+        if (result && Object.keys(result).length > 0) {
+          if (result.title && !newTask.title) newTask.title = result.title;
+          if (result.estimated_time && !newTask.estimated_time) newTask.estimated_time = result.estimated_time;
+          if (result.goal) {
+            const g = goals.value.find(g => g.name === result.goal);
+            if (g && !newTask.goal_id) newTask.goal_id = g.id;
+          }
+          if (result.tags && result.tags.length) {
+            if (!newTask.tag_ids) newTask.tag_ids = [];
+            for (const tagName of result.tags) {
+              const t = tags.value.find(t => t.name === tagName);
+              if (t && !newTask.tag_ids.includes(t.id)) {
+                newTask.tag_ids.push(t.id);
+              }
+            }
+          }
+          if (result.subtasks && result.subtasks.length) {
+            newTask.subtasks = result.subtasks;
+          }
+          if (result.folder_name && !newTask.folder_name) {
+            newTask.folder_name = result.folder_name;
+            newTask.create_folder = true;
+          }
+        }
+      } catch (e) { /* silent - AI inference is optional */ }
+      aiInferringQuickAdd.value = false;
+    }
+
     async function aiPickFolder() {
       try {
         const result = await api('/api/pick-folder', { method: 'POST' });
         if (result && result.path && aiSuggestions.value) {
           aiSuggestions.value.reuse_folder_path = result.path;
+        }
+      } catch (e) { /* cancelled */ }
+    }
+
+    async function quickAddPickFolder() {
+      try {
+        const result = await api('/api/pick-folder', { method: 'POST' });
+        if (result && result.path) {
+          newTask.reuse_folder_path = result.path;
         }
       } catch (e) { /* cancelled */ }
     }
@@ -1847,22 +1953,6 @@ createApp({
         await api(`/api/tasks/${taskId}/create-folder`, {
           method: 'POST',
           body: { folder_name: folderName.trim() }
-        });
-        await loadTasks();
-        selectTask(taskId);
-      }
-    }
-
-    async function ensureTaskFolder(taskId) {
-      const task = await api(`/api/tasks/${taskId}`);
-      if (task && !task.folder_path) {
-        const shortName = task.title.replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, '-').slice(0, 40);
-        const folderName = prompt('输入文件夹名称（简短即可）:', shortName);
-        if (folderName === null) return;
-        const name = folderName.trim() || shortName;
-        await api(`/api/tasks/${taskId}/create-folder`, {
-          method: 'POST',
-          body: { folder_name: name }
         });
         await loadTasks();
         selectTask(taskId);
@@ -1984,6 +2074,8 @@ createApp({
         ? newTask.people_str.split(/[,，]/).map(s => s.trim()).filter(Boolean)
         : [];
 
+      // 如果选了已有目录，则不创建新文件夹
+      const reusePath = newTask.reuse_folder_path || '';
       const id = await api('/api/tasks', {
         method: 'POST',
         body: {
@@ -1995,13 +2087,41 @@ createApp({
           due_date: newTask.due_date || new Date(Date.now() + 7*86400000).toISOString().slice(0, 10),
           estimated_time: newTask.estimated_time,
           people,
-          create_folder: newTask.create_folder,
+          create_folder: reusePath ? false : newTask.create_folder,
+          folder_name: newTask.folder_name || null,
           is_report: newTask.is_report ? 1 : 0,
           report_meeting: newTask.report_meeting,
         }
       });
 
+      // 关联已有目录
+      if (reusePath) {
+        await api(`/api/tasks/${id.id}`, {
+          method: 'PUT', body: { folder_path: reusePath }
+        });
+      }
+
+      // 创建子任务
+      if (newTask.subtasks && newTask.subtasks.length) {
+        for (const st of newTask.subtasks) {
+          if (st.trim()) {
+            await api(`/api/tasks/${id.id}/subtasks`, {
+              method: 'POST', body: { title: st.trim() }
+            });
+          }
+        }
+      }
+
       showQuickAdd.value = false;
+      // 重置表单
+      Object.assign(newTask, {
+        title: '', description: '', goal_id: null, routine_id: null,
+        tag_ids: [], due_date: new Date(Date.now() + 7*86400000).toISOString().slice(0, 10),
+        estimated_time: 0,
+        people_str: '', create_folder: true,
+        is_report: false, report_meeting: '',
+        folder_name: '', reuse_folder_path: '', subtasks: [],
+      });
       await loadTasks();
       selectTask(id.id);
       // 自动触发 AI 分析
@@ -2730,27 +2850,7 @@ createApp({
         .slice(0, 10);
     });
 
-    const recentCompleted = computed(() => {
-      return tasks.value
-        .filter(t => t.status === 'done' && t.completed_at)
-        .sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))
-        .slice(0, 10);
-    });
-
-    const pressureTasks = computed(() => {
-      const today = new Date().toISOString().slice(0, 10);
-      const threeDaysLater = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
-      return tasks.value
-        .filter(t => {
-          if (t.status === 'done' || t.status === 'shelved') return false;
-          if (!t.due_date) return false;
-          return t.due_date <= threeDaysLater;
-        })
-        .sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''));
-    });
-
     const pressureAnalysis = ref('');
-    const analyzingPressure = ref(false);
     const pressureChatMode = ref(false);
 
     function buildPressurePrompt() {
@@ -2870,23 +2970,9 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       showQuickAdd.value = true;
     }
 
-    // ==================== 统计 ====================
-    async function loadTimeStats() {
-      timeStats.value = await api(`/api/stats/time?days=${statsDays.value}`);
-    }
-
     async function loadReview() {
       const data = await api(`/api/stats/review?type=${reviewType.value}`);
       Object.assign(reviewData, data);
-    }
-
-    const totalTasksCount = computed(() => tasks.value.length);
-    const completedTasksCount = computed(() => tasks.value.filter(t => t.status === 'done').length);
-    const totalTimeSpent = computed(() => tasks.value.reduce((sum, t) => sum + (t.actual_time || 0), 0));
-
-    function barHeight(completed) {
-      const max = Math.max(...timeStats.value.map(d => d.completed || 0), 1);
-      return ((completed || 0) / max) * 100;
     }
 
     // ==================== 批量导入 ====================
@@ -3073,12 +3159,6 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     }
 
-    function formatChartDate(dateStr) {
-      if (!dateStr) return '';
-      const d = new Date(dateStr);
-      return `${d.getMonth() + 1}/${d.getDate()}`;
-    }
-
     function fileIcon(ext) {
       if (!ext) return '📄';
       const map = {
@@ -3214,10 +3294,6 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       } catch (e) {
         console.error('openDirBrowser error:', e);
       }
-    }
-
-    async function addTaskPath(taskId) {
-      openDirBrowser(taskId);
     }
 
     async function doAddPath(taskId, pathStr) {
@@ -3810,11 +3886,11 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       newTask, newTagName, newTagDimension, newTagIcon, emojiPickerFor, commonEmojis, selectTagEmoji, newPerson,
       timeLogDuration, timeLogNote,
       isDragging, fileInput,
-      statsDays, timeStats, goalStats,
+      goalStats,
       reviewType, reviewData,
       autoCreateFolder, statuses,
       showAIChat, aiMessages, aiInput, aiStreaming, aiStreamContent, aiChatMessages,
-      filteredTasks, totalTasksCount, completedTasksCount, totalTimeSpent,
+      filteredTasks,
       switchView, goToTask, toggleGoalFilter, toggleTagFilter, debounceSearch,
       openQuickAdd, quickCreateTask, toggleNewTaskTag,
       selectTask, closeDetail, saveSelectedTask, changeStatus, deleteSelectedTask,
@@ -3825,6 +3901,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       deleteAttachment, openAttachment, openFolder, openWithEditor,
       quickNote, appendingNote, appendToReadme,
       noteCards, cardSizes, newCardText, newCardCategory, filterNoteCategory, newItemTexts, editingItemId,
+      bubbleInput, bubbleInputRef, bubbleStyle, showBubbleInput, submitBubbleInput, dismissBubbleInput, getCatByKey,
       NOTE_CATEGORIES, filteredNoteCards,
       loadNoteCards, createCard, renameCard, updateCardCategory, cycleCardCategory, deleteCard,
       addItem, updateItem, deleteItem, handleNoteKeydown,
@@ -3834,14 +3911,14 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       saveGoal, editGoal, archiveGoal, loadGoalStats, goalProgress,
       collapsedGoalFolders, toggleGoalFolders, goalDeadlineHint,
       saveRoutine, editRoutine, archiveRoutine, createTaskFromRoutine,
-      loadTimeStats, loadReview, barHeight,
+      loadReview,
       saveSettings,
       aiConfigs, activeAIConfig, addAIConfig, removeAIConfig, switchAIModel, saveAIConfigs, aiConfigSaved, showAIConfigJson, aiConfigsJson,
       testAIConnection, aiTestResult,
-      statusLabel, freqLabel, isOverdue, formatDate, formatChartDate,
+      statusLabel, freqLabel, isOverdue, formatDate,
       fileIcon, formatSize,
       goalTaskFolders, openFolderFor,
-      pickFolderFor, pickFileFor, refreshGoalPaths, addGoalPath, removeGoalPath, addTaskPath, removeTaskPath,
+      pickFolderFor, pickFileFor, refreshGoalPaths, addGoalPath, removeGoalPath, removeTaskPath,
       onPathDragStart, onPathDragOver, onPathDrop, setPrimaryPath,
       pathReadmeStatus, checkPathReadme, checkAllPathReadmes,
       expandedProgress, dragPathIndex, dragPathOverIndex,
@@ -3873,7 +3950,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       // Subtask/parent helpers
       subtaskDoneCount, subtaskPercent, childTaskCount,
       // Dashboard
-      upcomingDeadlines, recentCompleted, pressureTasks, pressureAnalysis, analyzingPressure, analyzePressure, pressureChatMode, savePressureAnalysis,
+      upcomingDeadlines, pressureAnalysis, analyzePressure, pressureChatMode, savePressureAnalysis,
       // Reports
       filterReportOnly, reportMeetings, loadReportMeetings, groupedReportTasks,
       // Conversations
@@ -3890,7 +3967,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       quickInputText, quickInputParsed, createFromQuickInput,
       // AI suggestions
       aiSuggestions, aiEnriching, aiPickFolder, applyAISuggestions, dismissAISuggestions,
-      ensureTaskFolder, createFolderWithName,
+      aiInferringQuickAdd, aiInferQuickAdd, quickAddPickFolder, createFolderWithName,
       // Goal target date
       saveGoalTargetDate,
       // Task files
