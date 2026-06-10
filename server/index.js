@@ -713,7 +713,7 @@ app.post('/api/ai/decompose', (req, res) => {
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'Authorization': `Bearer ${cfg.api_key}` },
     };
   }
-  if (cfg.x_token) options.headers['X-Token'] = cfg.x_token;
+  if (cfg.x_token) { options.headers['X-Token'] = cfg.x_token; options.headers['x-auth-token'] = cfg.x_token; }
 
   const proxyReq = requester.request(options, (proxyRes) => {
     let body = '';
@@ -810,7 +810,7 @@ ${existingDirs}
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData), 'Authorization': `Bearer ${cfg.api_key}` },
     };
   }
-  if (cfg.x_token) options.headers['X-Token'] = cfg.x_token;
+  if (cfg.x_token) { options.headers['X-Token'] = cfg.x_token; options.headers['x-auth-token'] = cfg.x_token; }
 
   const proxyReq = requester.request(options, (proxyRes) => {
     let body = '';
@@ -967,7 +967,7 @@ function proxyOpenAI(baseUrl, model, apiKey, xToken, allMessages, res) {
       'Authorization': `Bearer ${apiKey}`,
     },
   };
-  if (xToken) options.headers['X-Token'] = xToken;
+  if (xToken) { options.headers['X-Token'] = xToken; options.headers['x-auth-token'] = xToken; }
 
   const proxyReq = requester.request(options, (proxyRes) => {
     // 非 2xx 状态码：收集错误信息直接返回 JSON
@@ -1032,7 +1032,7 @@ function proxyAnthropic(baseUrl, model, apiKey, xToken, allMessages, res) {
       'anthropic-version': '2023-06-01',
     },
   };
-  if (xToken) options.headers['X-Token'] = xToken;
+  if (xToken) { options.headers['X-Token'] = xToken; options.headers['x-auth-token'] = xToken; }
 
   const proxyReq = requester.request(options, (proxyRes) => {
     // 非 2xx 状态码：收集错误信息直接返回 JSON
@@ -1245,7 +1245,7 @@ function aiChatSync(cfg, messages) {
     } else {
       headers['Authorization'] = `Bearer ${cfg.api_key}`;
     }
-    if (cfg.x_token) headers['X-Token'] = cfg.x_token;
+    if (cfg.x_token) { headers['X-Token'] = cfg.x_token; headers['x-auth-token'] = cfg.x_token; }
 
     const proxyReq = requester.request({ hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', timeout: 60000, headers }, (proxyRes) => {
       let body = '';
