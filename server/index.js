@@ -1409,9 +1409,10 @@ app.post('/api/conversations/:id/continue', asyncHandler(async (req, res) => {
       runCmd = `cd '${safeCwd}' && claude --resume '${safeSessionId}'`;
     }
   if (platform === 'darwin') {
-    const tmpScript = path.join(os.tmpdir(), `godtodo_continue_${Date.now()}.sh`);
-    fs.writeFileSync(tmpScript, `#!/bin/bash\n${runCmd}\n`, { mode: 0o755 });
-    exec(`osascript -e 'tell application "Terminal" to activate' -e 'tell application "Terminal" to do script "bash ${tmpScript.replace(/"/g, '\\"')}"'`);
+    const terminalApp = db.getSetting('terminal_path') || 'Terminal';
+    const tmpScript = path.join(os.tmpdir(), `godtodo_continue_${Date.now()}.command`);
+    fs.writeFileSync(tmpScript, `${runCmd}\n`, { mode: 0o755 });
+    spawn('open', ['-a', terminalApp, tmpScript], { detached: true, stdio: 'ignore' }).unref();
   } else {
     spawn('x-terminal-emulator', ['-e', `bash -c "${runCmd}; exec bash"`], { detached: true, stdio: 'ignore' }).unref();
   }
