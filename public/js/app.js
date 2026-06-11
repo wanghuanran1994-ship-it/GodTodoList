@@ -358,14 +358,8 @@ createApp({
       const text = bubbleInput.text.trim();
       if (!text) return;
       const catKey = bubbleInput.categoryKey;
-      // 找到该分类最新的卡片
-      const card = noteCards.value.find(c => (c.category || '随手记') === catKey);
-      if (card) {
-        await api(`/api/note-cards/${card.id}/items`, { method: 'POST', body: { content: text } });
-      } else {
-        // 没有该分类的卡片，创建一个
-        await api('/api/note-cards', { method: 'POST', body: { category: catKey, content: text } });
-      }
+      // 始终创建新卡片
+      await api('/api/note-cards', { method: 'POST', body: { category: catKey, content: text } });
       await loadNoteCards();
       dismissBubbleInput();
     }
