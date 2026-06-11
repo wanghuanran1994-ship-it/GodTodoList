@@ -2792,11 +2792,6 @@ a { color: var(--primary); text-decoration: none; }
   overflow-x: hidden;
   overflow-y: auto;
   resize: both;
-  min-width: 420px;
-  width: 560px;
-  max-width: 98%;
-  min-height: 180px;
-  max-height: 80vh;
   transition: box-shadow 0.2s, border-color 0.2s;
   display: flex;
   flex-direction: column;

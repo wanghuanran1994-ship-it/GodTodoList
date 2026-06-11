@@ -402,9 +402,9 @@ createApp({
             }
           }
           if (addRow) realH += addRow.offsetHeight;
-          el.style.minHeight = Math.max(180, realH + 8) + 'px';
+          el.style.minHeight = (realH + 8) + 'px';
           // Width
-          let minW = 280;
+          let minW = 0;
           const itemContents = el.querySelectorAll('.note-item-content');
           for (const content of itemContents) {
             const text = content.textContent || '';
