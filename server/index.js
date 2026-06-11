@@ -1409,10 +1409,16 @@ app.post('/api/conversations/:id/continue', asyncHandler(async (req, res) => {
       runCmd = `cd '${safeCwd}' && claude --resume '${safeSessionId}'`;
     }
   if (platform === 'darwin') {
-    const terminalApp = db.getSetting('terminal_path') || 'Terminal';
-    const tmpScript = path.join(os.tmpdir(), `godtodo_continue_${Date.now()}.command`);
-    fs.writeFileSync(tmpScript, `${runCmd}\n`, { mode: 0o755 });
-    spawn('open', ['-a', terminalApp, tmpScript], { detached: true, stdio: 'ignore' }).unref();
+    const terminalPath = db.getSetting('terminal_path') || 'Terminal';
+    const appName = path.basename(terminalPath.replace(/\/+$/, ''), '.app');
+    const safeCmd = runCmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    if (/^iterm/i.test(appName)) {
+      // iTerm2: create tab + write text（在默认 shell zsh 中执行，PATH 正确）
+      exec(`osascript -e 'tell application "iTerm" to activate' -e 'tell application "iTerm" to if (count of windows) = 0 then create window with default profile' -e 'tell application "iTerm" to tell current window to create tab with default profile' -e 'tell application "iTerm" to tell current session of current window to write text "${safeCmd}"'`);
+    } else {
+      // Terminal.app 或其他兼容 do script 的终端
+      exec(`osascript -e 'tell application "${appName}" to activate' -e 'tell application "${appName}" to do script "${safeCmd}"'`);
+    }
   } else {
     spawn('x-terminal-emulator', ['-e', `bash -c "${runCmd}; exec bash"`], { detached: true, stdio: 'ignore' }).unref();
   }
