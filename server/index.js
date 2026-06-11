@@ -1290,16 +1290,20 @@ app.get('/api/conversations/scan', asyncHandler(async (req, res) => {
               sessions.push({
                 session_id: data.sessionId,
                 title: data.name || data.sessionId.slice(0, 8),
-                directory: data.cwd,
+                directory: path.normalize(data.cwd),
                 created_at: data.startedAt ? new Date(data.startedAt).toISOString() : '',
               });
             }
           } catch (e) {}
         }
         sessions.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
-        // 按目录过滤
+        // 按目录过滤：只匹配会话在任务目录内（或等于），不匹配父目录的会话
+        // 用 path.normalize 统一路径分隔符，确保 win/mac 都正确
         const filtered = directory
-          ? sessions.filter(s => s.directory.startsWith(directory) || directory.startsWith(s.directory))
+          ? sessions.filter(s => {
+              const nd = path.normalize(directory);
+              return s.directory === nd || s.directory.startsWith(nd + path.sep);
+            })
           : sessions;
         for (const s of filtered.slice(0, 30)) {
           results.push({ tool: 'claude', ...s });
@@ -1324,16 +1328,21 @@ app.get('/api/conversations/scan', asyncHandler(async (req, res) => {
             const buf = fs.readFileSync(dbPath);
             const SQL = await require('sql.js')();
             const openDb = new SQL.Database(buf);
-            const like = directory ? `%${directory}%` : '%';
-            const stmt = openDb.prepare('SELECT id, title, directory, time_created FROM session WHERE directory LIKE ? ORDER BY time_created DESC LIMIT 10');
-            stmt.bind([like]);
+            // 读取全部 session，用 JS 过滤（避免 SQLite LIKE 中 \ 被当成转义符）
+            const stmt = openDb.prepare('SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 50');
             while (stmt.step()) {
               const row = stmt.getAsObject();
+              const sesDir = path.normalize(row.directory || '');
+              // 目录过滤：只在任务目录内（或等于）匹配
+              if (directory) {
+                const nd = path.normalize(directory);
+                if (sesDir !== nd && !sesDir.startsWith(nd + path.sep)) continue;
+              }
               results.push({
                 tool: 'opencode',
                 session_id: row.id || '',
                 title: row.title || '',
-                directory: row.directory || '',
+                directory: sesDir,
                 created_at: row.time_created || '',
               });
             }
@@ -1411,13 +1420,39 @@ app.post('/api/conversations/:id/continue', asyncHandler(async (req, res) => {
   if (platform === 'darwin') {
     const terminalPath = db.getSetting('terminal_path') || 'Terminal';
     const appName = path.basename(terminalPath.replace(/\/+$/, ''), '.app');
-    const safeCmd = runCmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     if (/^iterm/i.test(appName)) {
-      // iTerm2: create tab + write text（在默认 shell zsh 中执行，PATH 正确）
-      exec(`osascript -e 'tell application "iTerm" to activate' -e 'tell application "iTerm" to if (count of windows) = 0 then create window with default profile' -e 'tell application "iTerm" to tell current window to create tab with default profile' -e 'tell application "iTerm" to tell current session of current window to write text "${safeCmd}"'`);
+      const appleScriptFile = path.join(os.tmpdir(), `godtodo_continue_${Date.now()}.applescript`);
+      const safeCmd = runCmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      const scriptContent = `tell application "iTerm2"
+  activate
+  if (count of windows) = 0 then
+    create window with default profile
+  end if
+  tell current window
+    create tab with default profile
+    tell current session
+      write text "${safeCmd}"
+    end tell
+  end tell
+end tell`;
+      fs.writeFileSync(appleScriptFile, scriptContent, 'utf-8');
+      exec(`osascript "${appleScriptFile}"`, (err, stdout, stderr) => {
+        if (err) console.error('osascript error:', err.message, stderr);
+        try { fs.unlinkSync(appleScriptFile); } catch (e) {}
+      });
     } else {
-      // Terminal.app 或其他兼容 do script 的终端
-      exec(`osascript -e 'tell application "${appName}" to activate' -e 'tell application "${appName}" to do script "${safeCmd}"'`);
+      // Terminal.app：同样写临时文件，避免 shell 内联转义问题
+      const appleScriptFile = path.join(os.tmpdir(), `godtodo_continue_${Date.now()}.applescript`);
+      const safeCmd = runCmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      const scriptContent = `tell application "${appName}"
+  activate
+  do script "${safeCmd}"
+end tell`;
+      fs.writeFileSync(appleScriptFile, scriptContent, 'utf-8');
+      exec(`osascript "${appleScriptFile}"`, (err, stdout, stderr) => {
+        if (err) console.error('osascript error:', err.message, stderr);
+        try { fs.unlinkSync(appleScriptFile); } catch (e) {}
+      });
     }
   } else {
     spawn('x-terminal-emulator', ['-e', `bash -c "${runCmd}; exec bash"`], { detached: true, stdio: 'ignore' }).unref();
