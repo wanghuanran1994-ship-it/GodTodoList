@@ -418,53 +418,32 @@ createApp({
     }
 
     function calcCardMinWidth(el) {
-      let minW = 0;
+      // 只以 header 的自然宽度为准，条目内容换行适应即可
       const header = el.querySelector('.note-card-header');
-      if (header) {
-        let headerW = 0;
-        let flexCount = 0;
-        for (const child of header.children) {
-          flexCount++;
-          const cs = getComputedStyle(child);
-          if (cs.flexShrink === '0' && child.offsetWidth > 0) {
-            headerW += child.offsetWidth;
-          }
-          // 标题 input（可伸缩，不会被 flexShrink=0 统计到），
-          // 用临时 span 测量其文字宽度，确保标题不换行/不滚动
-          if (child.classList.contains('note-card-title') && child.value) {
-            const tcs = getComputedStyle(child);
-            const span = document.createElement('span');
-            span.style.fontSize = tcs.fontSize;
-            span.style.fontWeight = tcs.fontWeight;
-            span.style.fontFamily = tcs.fontFamily;
-            span.style.letterSpacing = tcs.letterSpacing;
-            span.style.position = 'absolute';
-            span.style.visibility = 'hidden';
-            span.style.whiteSpace = 'nowrap';
-            span.textContent = child.value;
-            document.body.appendChild(span);
-            headerW += span.offsetWidth + 8; // +8 补偿 input 的 padding
-            document.body.removeChild(span);
-          }
-        }
-        if (flexCount > 1) headerW += (flexCount - 1) * 8;
-        minW = Math.max(minW, headerW + 50 + 32);
-      }
-      const itemsEl = el.querySelector('.note-items');
-      if (itemsEl) {
-        const tokens = (itemsEl.textContent || '').split(/\s+/);
-        let maxTokenLen = 0;
-        for (const t of tokens) maxTokenLen = Math.max(maxTokenLen, t.length);
-        const textMinW = Math.min(maxTokenLen * 8, 300);
-        minW = Math.max(minW, textMinW + 32);
-      }
-      el.querySelectorAll('img').forEach(img => {
-        if (img.naturalWidth > 0) minW = Math.max(minW, img.naturalWidth);
-      });
-      el.querySelectorAll('.nc-table-wrap').forEach(tbl => {
-        minW = Math.max(minW, tbl.scrollWidth);
-      });
-      return minW;
+      return header ? header.scrollWidth : 0;
+    }
+
+    function fitTitleWidth(input) {
+      if (!input || !input.value) return;
+      const cs = getComputedStyle(input);
+      const span = document.createElement('span');
+      span.style.fontSize = cs.fontSize;
+      span.style.fontWeight = cs.fontWeight;
+      span.style.fontFamily = cs.fontFamily;
+      span.style.letterSpacing = cs.letterSpacing;
+      span.style.position = 'absolute';
+      span.style.visibility = 'hidden';
+      span.style.whiteSpace = 'nowrap';
+      span.textContent = input.value;
+      document.body.appendChild(span);
+      const padLeft = parseFloat(cs.paddingLeft) || 0;
+      const padRight = parseFloat(cs.paddingRight) || 0;
+      input.style.width = (span.offsetWidth + padLeft + padRight + 2) + 'px'; // +2 防小数取整偏差
+      document.body.removeChild(span);
+    }
+
+    function fitAllTitleWidths() {
+      document.querySelectorAll('.note-card-title').forEach(fitTitleWidth);
     }
 
     function applyCardMinSizes() {
@@ -482,12 +461,36 @@ createApp({
             }
           }
         });
+        // 先收标题宽度到文字大小，再用离屏克隆法测量 header 自然宽度，
+        // 避免父容器宽度约束导致子元素收缩，确保 minWidth 足够大防止换行
+        fitAllTitleWidths();
+        const measureBox = document.createElement('div');
+        measureBox.style.cssText = 'position:absolute;visibility:hidden;width:max-content;top:-9999px;left:0;';
+        document.body.appendChild(measureBox);
         document.querySelectorAll('.note-card').forEach(el => {
           updateCardMinHeight(el);
-          const minW = calcCardMinWidth(el);
-          el.style.minWidth = minW > 0 ? (minW + 12) + 'px' : '';
+          const header = el.querySelector('.note-card-header');
+          let hw = 300;
+          if (header) {
+            const clone = header.cloneNode(true);
+            // 强制所有子元素不收缩，测出不换行的完整宽度
+            for (const child of clone.children) {
+              child.style.flexShrink = '0';
+            }
+            measureBox.appendChild(clone);
+            hw = clone.scrollWidth + 2; // +2 卡片 border
+            measureBox.removeChild(clone);
+          }
+          el.style.minWidth = hw + 'px';
+          el.style.width = hw + 'px';
+          const cardId = el.dataset.cardId;
+          if (cardId) {
+            const oldH = cardSizes.value[cardId]?.h;
+            cardSizes.value[cardId] = { w: hw, h: oldH || 0 };
+          }
           cardResizeObserver.observe(el);
         });
+        document.body.removeChild(measureBox);
       }, 150);
     }
 
@@ -3963,6 +3966,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       bubbleInput, bubbleInputRef, bubbleStyle, showBubbleInput, submitBubbleInput, dismissBubbleInput, getCatByKey,
       NOTE_CATEGORIES, filteredNoteCards,
       loadNoteCards, createCard, renameCard, updateCardCategory, cycleCardCategory, deleteCard,
+      fitTitleWidth, fitAllTitleWidths,
       addItem, updateItem, deleteItem, handleNoteKeydown,
       onNoteHandleDown,
       renderItemContent, copyItemContent, onNoteClick, startEditItem, saveEditItem, cancelEditItem, handleNotePaste, openNotePath,

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GodTodoList - 事项管理体系</title>
-  <link rel="stylesheet" href="/css/style.css?v=26">
+  <link rel="stylesheet" href="/css/style.css?v=32">
 </head>
 <body>
   <div id="app">
@@ -651,6 +651,7 @@
                 <input :value="card.title || '未命名'"
                        @blur="renameCard(card.id, $event.target.value)"
                        @keyup.enter="$event.target.blur()"
+                       @input="fitTitleWidth($event.target)"
                        class="note-card-title">
                 <button class="note-card-chat" @click="openNoteChat(card.id, card.title, card.items)"
                         :title="noteConversations[card.id] ? '继续对话' : 'AI 对话'">
@@ -1737,6 +1738,6 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
-  <script src="/js/app.js?v=43"></script>
+  <script src="/js/app.js?v=52"></script>
 </body>
 </html>

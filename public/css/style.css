@@ -2821,9 +2821,10 @@ a { color: var(--primary); text-decoration: none; }
 .note-card-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
+  gap: 6px;
+  padding: 6px 10px;
   background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
 }
 .note-card-grip {
   flex-shrink: 0;
@@ -2838,29 +2839,28 @@ a { color: var(--primary); text-decoration: none; }
 .note-card-grip:active {
   cursor: grabbing;
 }
-  border-bottom: 1px solid var(--border);
-}
 .note-card-category {
   font-size: var(--text-xs);
   flex-shrink: 0;
-  padding: 2px 8px;
+  padding: 1px 6px;
   border-radius: 10px;
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
 }
 .note-card-title {
-  flex: 1;
+  flex: 0 1 auto;
   border: none;
   background: transparent;
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text);
   outline: none;
-  padding: 2px 6px;
+  padding: 2px 4px;
   border-radius: 4px;
   transition: background 0.15s;
-  min-width: 0;
+  min-width: 2em;
+  width: auto;
 }
 .note-card-title:hover { background: var(--card); }
 .note-card-title:focus { background: var(--card); }
@@ -2869,22 +2869,24 @@ a { color: var(--primary); text-decoration: none; }
   color: var(--text-4);
   font-weight: 500;
   background: var(--bg);
-  padding: 2px 8px;
+  padding: 1px 6px;
   border-radius: 10px;
   white-space: nowrap;
   min-width: 24px;
   text-align: center;
+  flex-shrink: 0;
 }
 .note-card-chat {
   font-size: var(--text-sm);
   cursor: pointer;
   border: 1px solid transparent;
   background: var(--primary-light);
-  padding: 4px 10px;
+  padding: 2px 8px;
   border-radius: var(--radius-sm);
   transition: all 0.15s;
   flex-shrink: 0;
   color: var(--primary);
+  margin-left: auto;
 }
 .note-card-chat:hover { background: var(--primary); color: #fff; }
 
@@ -2912,10 +2914,10 @@ a { color: var(--primary); text-decoration: none; }
   overflow-y: auto;
 }
 .note-item {
-  padding: 10px 16px;
+  padding: 6px 12px;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 6px;
   border-bottom: 1px solid var(--border-light);
   transition: background 0.12s;
   position: relative;
@@ -3129,7 +3131,7 @@ a { color: var(--primary); text-decoration: none; }
 .note-item-btn-danger:hover { background: rgba(239,68,68,0.08); color: var(--danger); }
 
 .note-items-empty {
-  padding: 24px 16px;
+  padding: 16px 12px;
   text-align: center;
   font-size: var(--text-xs);
   color: var(--text-4);
@@ -3137,7 +3139,7 @@ a { color: var(--primary); text-decoration: none; }
 
 /* ════ 添加行 ════ */
 .note-add-row {
-  padding: 6px 12px 10px;
+  padding: 4px 10px 8px;
   border-top: 1px solid var(--border-light);
 }
 .note-add-input {
