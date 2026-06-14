@@ -429,6 +429,23 @@ createApp({
           if (cs.flexShrink === '0' && child.offsetWidth > 0) {
             headerW += child.offsetWidth;
           }
+          // 标题 input（可伸缩，不会被 flexShrink=0 统计到），
+          // 用临时 span 测量其文字宽度，确保标题不换行/不滚动
+          if (child.classList.contains('note-card-title') && child.value) {
+            const tcs = getComputedStyle(child);
+            const span = document.createElement('span');
+            span.style.fontSize = tcs.fontSize;
+            span.style.fontWeight = tcs.fontWeight;
+            span.style.fontFamily = tcs.fontFamily;
+            span.style.letterSpacing = tcs.letterSpacing;
+            span.style.position = 'absolute';
+            span.style.visibility = 'hidden';
+            span.style.whiteSpace = 'nowrap';
+            span.textContent = child.value;
+            document.body.appendChild(span);
+            headerW += span.offsetWidth + 8; // +8 补偿 input 的 padding
+            document.body.removeChild(span);
+          }
         }
         if (flexCount > 1) headerW += (flexCount - 1) * 8;
         minW = Math.max(minW, headerW + 50 + 32);
