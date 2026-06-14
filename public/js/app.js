@@ -387,41 +387,89 @@ createApp({
       });
       localStorage.setItem('noteCardSizes', JSON.stringify(sizes));
     }
+    let cardResizeObserver = null;
+
+    function updateCardMinHeight(el) {
+      // 临时把 .note-items 的 flex 伸缩和 overflow 裁切解除，
+      // 得到真实内容高度，否则 flex: 1 拉伸后 scrollHeight 会包含
+      // 被拉伸的多余空间，导致 minHeight 偏大。
+      let contentH = 0;
+      const itemsEl = el.querySelector('.note-items');
+      let itemsRealH = 0;
+      if (itemsEl) {
+        const prevOY = itemsEl.style.overflowY;
+        const prevFlex = itemsEl.style.flex;
+        itemsEl.style.overflowY = 'visible';
+        itemsEl.style.flex = '0 0 auto';
+        void itemsEl.offsetHeight;
+        itemsRealH = itemsEl.scrollHeight;
+        itemsEl.style.overflowY = prevOY;
+        itemsEl.style.flex = prevFlex;
+      }
+      for (const child of el.children) {
+        contentH += (child === itemsEl) ? itemsRealH : child.offsetHeight;
+      }
+      const cs = getComputedStyle(el);
+      const borderTop = parseFloat(cs.borderTopWidth) || 0;
+      const borderBot = parseFloat(cs.borderBottomWidth) || 0;
+      const padTop = parseFloat(cs.paddingTop) || 0;
+      const padBot = parseFloat(cs.paddingBottom) || 0;
+      el.style.minHeight = (contentH + padTop + padBot + borderTop + borderBot) + 'px';
+    }
+
+    function calcCardMinWidth(el) {
+      let minW = 0;
+      const header = el.querySelector('.note-card-header');
+      if (header) {
+        let headerW = 0;
+        let flexCount = 0;
+        for (const child of header.children) {
+          flexCount++;
+          const cs = getComputedStyle(child);
+          if (cs.flexShrink === '0' && child.offsetWidth > 0) {
+            headerW += child.offsetWidth;
+          }
+        }
+        if (flexCount > 1) headerW += (flexCount - 1) * 8;
+        minW = Math.max(minW, headerW + 50 + 32);
+      }
+      const itemsEl = el.querySelector('.note-items');
+      if (itemsEl) {
+        const tokens = (itemsEl.textContent || '').split(/\s+/);
+        let maxTokenLen = 0;
+        for (const t of tokens) maxTokenLen = Math.max(maxTokenLen, t.length);
+        const textMinW = Math.min(maxTokenLen * 8, 300);
+        minW = Math.max(minW, textMinW + 32);
+      }
+      el.querySelectorAll('img').forEach(img => {
+        if (img.naturalWidth > 0) minW = Math.max(minW, img.naturalWidth);
+      });
+      el.querySelectorAll('.nc-table-wrap').forEach(tbl => {
+        minW = Math.max(minW, tbl.scrollWidth);
+      });
+      return minW;
+    }
+
     function applyCardMinSizes() {
       setTimeout(() => {
+        if (cardResizeObserver) cardResizeObserver.disconnect();
+        cardResizeObserver = new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            // 只在宽度变化时重算 minHeight —— 宽度影响文字换行，
+            // 换行影响内容高度。纯高度变化不需要重算，也能避免循环。
+            const newW = entry.contentBoxSize[0].inlineSize;
+            const oldW = parseFloat(entry.target.dataset.lastWidth) || 0;
+            if (Math.abs(newW - oldW) > 0.5) {
+              entry.target.dataset.lastWidth = Math.round(newW);
+              updateCardMinHeight(entry.target);
+            }
+          }
+        });
         document.querySelectorAll('.note-card').forEach(el => {
-          // Height
-          const header = el.querySelector('.note-card-header');
-          const items = el.querySelector('.note-items');
-          const addRow = el.querySelector('.note-add-row');
-          let realH = 0;
-          if (header) realH += header.offsetHeight;
-          if (items) {
-            for (const child of items.children) {
-              realH += child.offsetHeight;
-            }
-          }
-          if (addRow) realH += addRow.offsetHeight;
-          el.style.minHeight = (realH + 8) + 'px';
-          // Width
-          let minW = 0;
-          const itemContents = el.querySelectorAll('.note-item-content');
-          for (const content of itemContents) {
-            const text = content.textContent || '';
-            const tokens = text.split(/\s+/);
-            for (const token of tokens) {
-              if (token.length > 40) minW = Math.max(minW, token.length * 8 + 60);
-            }
-            const imgs = content.querySelectorAll('img');
-            for (const img of imgs) {
-              if (img.naturalWidth > 0) minW = Math.max(minW, img.naturalWidth + 60);
-            }
-            const tables = content.querySelectorAll('.nc-table-wrap');
-            for (const tbl of tables) {
-              minW = Math.max(minW, tbl.scrollWidth + 60);
-            }
-          }
-          el.style.minWidth = minW + 'px';
+          updateCardMinHeight(el);
+          const minW = calcCardMinWidth(el);
+          el.style.minWidth = minW > 0 ? (minW + 12) + 'px' : '';
+          cardResizeObserver.observe(el);
         });
       }, 150);
     }
