@@ -360,6 +360,7 @@ createApp({
       const catKey = bubbleInput.categoryKey;
       // 始终创建新卡片
       await api('/api/note-cards', { method: 'POST', body: { category: catKey, content: text } });
+      filterNoteCategory.value = null; // 切回"全部"，避免卡被筛掉
       await loadNoteCards();
       dismissBubbleInput();
     }
@@ -397,7 +398,7 @@ createApp({
           if (s && s.w > 0) sizes[id] = { w: s.w, h: s.h || 0 };
         }
         localStorage.setItem('noteCardSizes', JSON.stringify(sizes));
-      }, 300);
+      }, 100);
     }
     let cardResizeObserver = null;
 
@@ -3708,6 +3709,9 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
     onMounted(async () => {
       loadCardSizes();
       window.addEventListener('beforeunload', saveCardSizesFromDOM);
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') saveCardSizesFromDOM();
+      });
       document.addEventListener('keydown', handleKeydown);
       document.addEventListener('click', (e) => {
         if (!e.target.closest('.emoji-pick-btn') && !e.target.closest('.emoji-grid')) {
