@@ -382,8 +382,9 @@ createApp({
       document.querySelectorAll('.note-card').forEach(el => {
         const cardId = el.dataset.cardId;
         if (!cardId) return;
-        const w = Math.round(el.clientWidth);
-        const h = Math.round(el.clientHeight);
+        const r = el.getBoundingClientRect();
+        const w = Math.round(r.width);
+        const h = Math.round(r.height);
         if (w > 0 && h > 0) sizes[cardId] = { w, h };
       });
       localStorage.setItem('noteCardSizes', JSON.stringify(sizes));
@@ -464,32 +465,38 @@ createApp({
         if (cardResizeObserver) cardResizeObserver.disconnect();
         cardResizeObserver = new ResizeObserver((entries) => {
           for (const entry of entries) {
-            const newW = entry.contentBoxSize[0].inlineSize;
-            const newH = entry.contentBoxSize[0].blockSize;
+            // 用 getBoundingClientRect 取 border-box 尺寸，与 Vue 的 width/height 属性一致
+            // （全局 box-sizing: border-box，contentBoxSize 会少算 border 导致持续收缩）
+            const rect = entry.target.getBoundingClientRect();
+            const newW = Math.round(rect.width);
+            const newH = Math.round(rect.height);
             const oldW = parseFloat(entry.target.dataset.lastWidth) || 0;
             const oldH = parseFloat(entry.target.dataset.lastHeight) || 0;
             const wChanged = Math.abs(newW - oldW) > 0.5;
             const hChanged = Math.abs(newH - oldH) > 0.5;
             if (wChanged) {
-              entry.target.dataset.lastWidth = Math.round(newW);
+              entry.target.dataset.lastWidth = newW;
               updateCardMinHeight(entry.target);
             }
-            // 任何尺寸变化 → 同步到 reactive 状态 → 自动保存
             if (wChanged || hChanged) {
-              entry.target.dataset.lastHeight = Math.round(newH);
+              entry.target.dataset.lastHeight = newH;
               const cardId = entry.target.dataset.cardId;
               if (cardId) {
-                cardSizes.value[cardId] = { w: Math.round(newW), h: Math.round(newH) };
+                cardSizes.value[cardId] = { w: newW, h: newH };
                 debouncedSaveCardSizes();
               }
             }
           }
         });
         // 先读取所有卡片的实际 DOM 尺寸，防止后续测量覆盖用户已拖动的尺寸
+        // 用 getBoundingClientRect 取 border-box 尺寸，与 Vue width/height 一致
         const domSizes = {};
         document.querySelectorAll('.note-card').forEach(el => {
           const id = el.dataset.cardId;
-          if (id) domSizes[id] = { w: el.clientWidth, h: el.clientHeight };
+          if (id) {
+            const r = el.getBoundingClientRect();
+            domSizes[id] = { w: Math.round(r.width), h: Math.round(r.height) };
+          }
         });
         // 收标题宽度，再用 width:0 溢出法测量 header 最小宽度
         // 卡片 width=0 时，flex-shrink:0 的子元素维持原宽，
