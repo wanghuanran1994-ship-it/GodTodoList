@@ -484,7 +484,13 @@ createApp({
             }
           }
         });
-        // 先收标题宽度到文字大小，再用 width:0 溢出法测量 header 最小宽度
+        // 先读取所有卡片的实际 DOM 尺寸，防止后续测量覆盖用户已拖动的尺寸
+        const domSizes = {};
+        document.querySelectorAll('.note-card').forEach(el => {
+          const id = el.dataset.cardId;
+          if (id) domSizes[id] = { w: el.clientWidth, h: el.clientHeight };
+        });
+        // 收标题宽度，再用 width:0 溢出法测量 header 最小宽度
         // 卡片 width=0 时，flex-shrink:0 的子元素维持原宽，
         // 标题 flex-shrink:1 缩到 min-width:2em，header.scrollWidth = 不换行最小宽度
         fitAllTitleWidths();
@@ -507,8 +513,11 @@ createApp({
           if (cardId) {
             const saved = cardSizes.value[cardId];
             if (!saved || !saved.w) {
-              // 新卡片：初始宽度 = minWidth，高度由 minHeight 控制
-              cardSizes.value[cardId] = { w: hw, h: 0 };
+              // 新卡片：用实际 DOM 尺寸（用户可能已拖动），不低于 minWidth
+              const cur = domSizes[cardId];
+              const w = Math.max(cur?.w || 0, hw);
+              const h = cur?.h || 0;
+              cardSizes.value[cardId] = { w, h };
             }
             // 已有保存尺寸：不动，保持用户设置的值。
             // minWidth 已设到元素上，确保不会太小。
