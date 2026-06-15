@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GodTodoList - 事项管理体系</title>
-  <link rel="stylesheet" href="/css/style.css?v=35">
+  <link rel="stylesheet" href="/css/style.css?v=37">
 </head>
 <body>
   <div id="app">
@@ -677,7 +677,15 @@
                   <span class="note-item-handle"
                         @mousedown="onNoteHandleDown($event, card.id, item.id)"
                         title="拖拽排序">⋮⋮</span>
-                  <span class="note-item-bullet" :class="{ child: item.parent_id }"></span>
+                  <div class="note-item-icon-wrap">
+                    <button class="note-item-icon-btn" @click.stop="toggleItemIconPicker(item.id)"
+                            :title="'点击切换图标（当前: ' + displayItemIcon(item) + '）'">{{ displayItemIcon(item) }}</button>
+                    <div class="note-item-icon-grid" v-if="noteItemIconPicker === item.id" @click.stop>
+                      <button class="note-item-icon-option" v-for="ic in noteItemIcons" :key="ic"
+                              @click="setItemIcon(item, ic)" :title="ic">{{ ic }}</button>
+                      <button class="note-item-icon-clear" @click="clearItemIcon(item)" title="恢复默认">↺</button>
+                    </div>
+                  </div>
                   <!-- 编辑模式 -->
                   <textarea v-if="editingItemId === item.id"
                             :value="item.content"
@@ -1743,6 +1751,6 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
-  <script src="/js/app.js?v=61"></script>
+  <script src="/js/app.js?v=63"></script>
 </body>
 </html>

@@ -236,6 +236,9 @@ createApp({
     const newTagIcon = ref('');
     const emojiPickerFor = ref(null);
     const commonEmojis = '🔥 ⭐ 🚀 💡 📌 🎯 ⚡ 🔔 💼 📊 🏠 📝 🔧 🛠 📋 🏷 🎨 💬 🧠 🎵 📚 🗂 🔍 ⚙️ 💰 📅 🏃 🎪 🔮 🧩 🏆 🎭 🌟 💎 🕐 📢 🗣 🌍 💻 🎓 🧪 🛡️ 🔑 📎 ✨ 💪 🤝 🎁 🏗 🧹 📈 🧲 💊 🔬 📡 🏥 🚧 🎲 📖 🖊️ ✅ ❌ ❓ 💭 🗳️ 📨 🔗 🧭 🪜 🎻'.split(' ');
+    // 笔记条目行首图标选择器
+    const noteItemIconPicker = ref(null);
+    const noteItemIcons = ['🚩', '⚫', '📌', '💡', '⚠️', '✅', '❤️', '⭐', '🔥', '🚧', '❌', '❓', '🎯', '🏁', '💎', '🗑️'];
     const emojiSuggest = {
       '紧急': '🔥', '重要': '⭐', '高优': '🚀', 'bug': '🐛', '修复': '🔧',
       '学习': '📚', '研究': '🔬', '调研': '🔍', '文档': '📝', '写作': '✍️',
@@ -265,6 +268,36 @@ createApp({
         if (tag) { tag.icon = emoji; updateTag(tag); }
       }
       emojiPickerFor.value = null;
+    }
+
+    // 笔记条目图标：默认值规则 —— 顶层🚩 / 子项⚫
+    function displayItemIcon(item) {
+      if (item.icon) return item.icon;
+      return item.parent_id ? '⚫' : '🚩';
+    }
+    function toggleItemIconPicker(itemId) {
+      noteItemIconPicker.value = noteItemIconPicker.value === itemId ? null : itemId;
+    }
+    async function setItemIcon(item, icon) {
+      // 立即更新 UI，避免等 API
+      item.icon = icon;
+      noteItemIconPicker.value = null;
+      try {
+        await api(`/api/note-items/${item.id}`, { method: 'PUT', body: { icon } });
+      } catch (e) {
+        // 失败回滚
+        item.icon = null;
+      }
+    }
+    async function clearItemIcon(item) {
+      const prev = item.icon;
+      item.icon = null;
+      noteItemIconPicker.value = null;
+      try {
+        await api(`/api/note-items/${item.id}`, { method: 'PUT', body: { icon: null } });
+      } catch (e) {
+        item.icon = prev;
+      }
     }
 
     // 人员
@@ -2717,8 +2750,10 @@ createApp({
       await api('/api/note-items/reorder', { method: 'PUT', body: { items: updates } });
       await loadNoteCards();
     }
-    async function updateItem(itemId, content) {
-      await api(`/api/note-items/${itemId}`, { method: 'PUT', body: { content: content || '' } });
+    async function updateItem(itemId, content, icon) {
+      const body = { content: content || '' };
+      if (icon !== undefined) body.icon = icon;
+      await api(`/api/note-items/${itemId}`, { method: 'PUT', body });
     }
     async function deleteItem(cardId, itemId) {
       await api(`/api/note-items/${itemId}`, { method: 'DELETE' });
@@ -2856,6 +2891,17 @@ createApp({
 
     function startEditItem(item) {
       editingItemId.value = item.id;
+      // 自动 focus textarea：让 @blur 在用户点击外部时自然触发 saveEditItem
+      // 同一时刻只有一个 item 在编辑，querySelector 取第一个即可
+      nextTick(() => {
+        const ta = document.querySelector('textarea.note-item-edit');
+        if (ta) {
+          ta.focus();
+          // 光标放到末尾，方便续写
+          const len = ta.value.length;
+          ta.setSelectionRange(len, len);
+        }
+      });
     }
     async function saveEditItem(itemId, newContent) {
       editingItemId.value = null;
@@ -3665,35 +3711,49 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let fullContent = '';
+        // SSE buffer：TCP 包可能把一行 data: 拆到多个 chunk，必须跨 chunk 拼接
+        let sseBuffer = '';
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
           const chunk = decoder.decode(value, { stream: true });
-          // 解析 SSE 数据
-          const lines = chunk.split('\n');
+          sseBuffer += chunk;
+          // 按 \n 切，最后一段可能是不完整行，留到下次
+          const lines = sseBuffer.split('\n');
+          sseBuffer = lines.pop() || '';
           for (const line of lines) {
             const tl = line.trim();
-            if (tl.startsWith('data:')) {
-              const data = tl.substring(tl.indexOf(':') + 1).trim();
-              if (data === '[DONE]') continue;
-              try {
-                const json = JSON.parse(data);
-                const d = json.choices?.[0]?.delta;
-                const delta = (d?.content || '');
-                if (delta) {
-                  fullContent += delta;
-                  aiStreamContent.value = fullContent;
-                  await nextTick();
-                  scrollAIChat();
-                }
-              } catch (e) {
-                // 非 JSON 行，直接追加
-                fullContent += chunk;
+            if (!tl.startsWith('data:')) continue;
+            const data = tl.substring(tl.indexOf(':') + 1).trim();
+            if (!data || data === '[DONE]') continue;
+            try {
+              const json = JSON.parse(data);
+              const d = json.choices?.[0]?.delta;
+              const delta = (d?.content || '');
+              if (delta) {
+                fullContent += delta;
                 aiStreamContent.value = fullContent;
+                await nextTick();
+                scrollAIChat();
               }
+            } catch (e) {
+              // 单行 JSON.parse 失败：忽略该行，不再追加原始 chunk（避免把 SSE 协议文本混入正文）
+              console.warn('SSE JSON parse failed:', data.slice(0, 100));
             }
+          }
+        }
+        // 处理 buffer 中残留的最后一行
+        const lastLine = sseBuffer.trim();
+        if (lastLine.startsWith('data:')) {
+          const data = lastLine.substring(lastLine.indexOf(':') + 1).trim();
+          if (data && data !== '[DONE]') {
+            try {
+              const json = JSON.parse(data);
+              const delta = json.choices?.[0]?.delta?.content || '';
+              if (delta) fullContent += delta;
+            } catch (e) { /* ignore */ }
           }
         }
 
@@ -3846,6 +3906,10 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       document.addEventListener('click', (e) => {
         if (!e.target.closest('.emoji-pick-btn') && !e.target.closest('.emoji-grid')) {
           emojiPickerFor.value = null;
+        }
+        // 关闭笔记条目图标选择器
+        if (!e.target.closest('.note-item-icon-btn') && !e.target.closest('.note-item-icon-grid')) {
+          noteItemIconPicker.value = null;
         }
       });
       await loadAll();
@@ -4113,6 +4177,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       scanImportDir, toggleImportAll, executeImport,
       editingGoal, editingRoutine, goalForm, routineForm,
       newTask, newTagName, newTagDimension, newTagIcon, emojiPickerFor, commonEmojis, selectTagEmoji, newPerson,
+      noteItemIconPicker, noteItemIcons, displayItemIcon, toggleItemIconPicker, setItemIcon, clearItemIcon,
       timeLogDuration, timeLogNote,
       isDragging, fileInput,
       goalStats,

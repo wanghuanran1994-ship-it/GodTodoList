@@ -205,6 +205,8 @@ function createTables() {
   )`);
   // migration: add parent_id if not exists
   try { db.run('ALTER TABLE note_items ADD COLUMN parent_id INTEGER'); } catch(e) { /* already exists */ }
+  // migration: add icon column (NULL = 用默认值：顶层🚩 / 子项⚫)
+  try { db.run('ALTER TABLE note_items ADD COLUMN icon TEXT'); } catch(e) { /* already exists */ }
 
   // 日报/周报
   db.run(`CREATE TABLE IF NOT EXISTS reports (
@@ -862,6 +864,8 @@ function updateContact(id, d) {
 }
 
 function deleteContact(id) {
+  // 先清理 task_people 中的引用，避免外键孤立
+  db.run('DELETE FROM task_people WHERE contact_id = ?', [id]);
   db.run('DELETE FROM contacts WHERE id = ?', [id]);
   save();
 }
@@ -1056,8 +1060,14 @@ function addNoteItem(cardId, content, parentId) {
   return queryOne('SELECT last_insert_rowid() as id').id;
 }
 
-function updateNoteItem(id, content, parentId) {
-  if (parentId !== undefined) {
+function updateNoteItem(id, content, parentId, icon) {
+  // icon: undefined=不修改, null=清除(用默认), 字符串=设置
+  if (icon !== undefined && parentId !== undefined) {
+    db.run('UPDATE note_items SET content = ?, parent_id = ?, icon = ? WHERE id = ?',
+      [content || '', parentId || null, icon, id]);
+  } else if (icon !== undefined) {
+    db.run('UPDATE note_items SET content = ?, icon = ? WHERE id = ?', [content || '', icon, id]);
+  } else if (parentId !== undefined) {
     db.run('UPDATE note_items SET content = ?, parent_id = ? WHERE id = ?', [content || '', parentId || null, id]);
   } else {
     db.run('UPDATE note_items SET content = ? WHERE id = ?', [content || '', id]);
@@ -1078,6 +1088,8 @@ function reorderNoteCards(items) {
 }
 
 function deleteNoteItem(id) {
+  // 递归删除子项（parent_id 层级结构），避免孤儿数据
+  db.run('DELETE FROM note_items WHERE parent_id = ?', [id]);
   db.run('DELETE FROM note_items WHERE id = ?', [id]);
   save();
 }

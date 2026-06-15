@@ -45,7 +45,9 @@
 
   /* 功能色 */
   --success: #22c55e;
+  --success-light: #d4edda;
   --warning: #f59e0b;
+  --warning-light: #fef3c7;
   --danger: #ef4444;
   --info: #7c3aed;
 
@@ -1927,7 +1929,7 @@ a { color: var(--primary); text-decoration: none; }
 
 .task-card-actions .btn-xs {
   padding: 2px 6px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   border: 1px solid var(--border);
   background: var(--bg);
   border-radius: var(--radius-sm);
@@ -2946,6 +2948,87 @@ a { color: var(--primary); text-decoration: none; }
   margin-top: 8px;
   opacity: 0.3;
 }
+
+/* ════ 笔记条目行首图标（替换原 bullet） ════ */
+.note-item-icon-wrap {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+}
+.note-item-icon-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-size: 14px;
+  line-height: 20px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  border-radius: 4px;
+  transition: opacity 0.15s, background 0.15s;
+  margin-top: 1px;
+}
+.note-item-icon-btn:hover {
+  opacity: 1;
+  background: var(--bg-2);
+}
+.note-item-icon-grid {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 200;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 2px;
+  padding: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  width: 200px;
+}
+.note-item-icon-option {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 4px;
+  transition: background 0.12s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.note-item-icon-option:hover {
+  background: var(--primary-light);
+}
+.note-item-icon-clear {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  font-size: 14px;
+  border-radius: 4px;
+  color: var(--text-3);
+  transition: background 0.12s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  grid-column: span 6;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-light);
+  padding-top: 6px;
+}
+.note-item-icon-clear:hover {
+  background: var(--bg-2);
+  color: var(--text);
+}
 .note-item-child {
   border-left: 2px solid var(--border-light);
 }
@@ -3317,6 +3400,8 @@ body.dark {
   --sb-text-active: #a78bfa;
   --sb-border: #2a2b3d;
   --primary-light: #2d2650;
+  --success-light: #0f2e1a;
+  --warning-light: #3b2a10;
   --shadow-xs: 0 1px 2px rgba(0,0,0,0.2);
   --shadow-sm: 0 2px 6px rgba(0,0,0,0.25);
   --shadow: 0 4px 12px rgba(0,0,0,0.3);
@@ -3746,7 +3831,7 @@ body.dark .ai-suggestion-card {
   min-width: 0;
   display: flex;
   flex-direction: column;
-}}
+}
 
 /* 报告历史列表 */
 .report-history-list { max-height: 520px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }

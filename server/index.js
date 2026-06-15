@@ -597,7 +597,12 @@ app.post('/api/attachments/open', asyncHandler(async (req, res) => {
 // ==================== Time Logs ====================
 
 app.post('/api/tasks/:id/time-logs', (req, res) => {
-  db.addTimeLog(Number(req.params.id), req.body.duration, req.body.note);
+  // Number() 强转，防止前端传字符串导致 actual_time 累加时变成字符串拼接
+  const duration = Number(req.body.duration);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return res.status(400).json({ error: '时长必须是正数' });
+  }
+  db.addTimeLog(Number(req.params.id), duration, req.body.note);
   res.json({ success: true });
 });
 
@@ -822,22 +827,28 @@ app.post('/api/ai/enrich', (req, res) => {
         if (!jsonMatch) return res.json({});
         const parsed = JSON.parse(jsonMatch[0]);
 
-        // Map goal name to id
-        if (parsed.goal) {
+        // 字段校验和类型转换 —— AI 可能返回意外类型（字符串 vs 数字、null、缺字段）
+        const result = {
+          title: typeof parsed.title === 'string' ? parsed.title.slice(0, 100) : '',
+          description: typeof parsed.description === 'string' ? parsed.description.slice(0, 500) : '',
+          estimated_time: Math.max(0, Math.min(60 * 24 * 7, Number(parsed.estimated_time) || 0)),
+          folder_name: typeof parsed.folder_name === 'string' ? parsed.folder_name.replace(/[^\w\-]/g, '').slice(0, 30) : '',
+          subtasks: Array.isArray(parsed.subtasks)
+            ? parsed.subtasks.filter(s => typeof s === 'string' && s.trim()).slice(0, 10)
+            : [],
+        };
+        if (parsed.goal && typeof parsed.goal === 'string') {
           const g = allGoals.find(g => g.name === parsed.goal);
-          if (g) parsed.goal_id = g.id;
+          if (g) result.goal_id = g.id;
         }
-        delete parsed.goal;
-
-        // Map tag names to ids
-        if (parsed.tags && parsed.tags.length) {
-          parsed.tag_ids = parsed.tags
-            .map(name => { const t = allTags.find(t => t.name === name); return t ? t.id : null; })
+        if (Array.isArray(parsed.tags)) {
+          const ids = parsed.tags
+            .map(name => { const t = allTags.find(t => t.name === String(name)); return t ? t.id : null; })
             .filter(Boolean);
+          if (ids.length) result.tag_ids = ids;
         }
-        delete parsed.tags;
 
-        res.json(parsed);
+        res.json(result);
       } catch (e) {
         res.json({});
       }
@@ -1100,7 +1111,7 @@ function proxyAnthropic(baseUrl, model, apiKey, xToken, allMessages, res) {
 
 // 分析任务进展 —— 读取关联目录全部文件内容，让 AI 推理当前进度
 app.post('/api/tasks/:id/analyze-progress', asyncHandler(async (req, res) => {
-  const task = db.getTask(req.params.id);
+  const task = db.getTask(Number(req.params.id));
   if (!task) return res.status(404).json({ error: '任务不存在' });
 
   const dirs = [];
@@ -1521,7 +1532,8 @@ app.put('/api/note-items/reorder', (req, res) => {
 
 app.put('/api/note-items/:id', (req, res) => {
   const body = req.body;
-  db.updateNoteItem(Number(req.params.id), body.content || '', body.parent_id);
+  // body.icon 可能是 undefined（不修改）/ null（清除）/ 字符串
+  db.updateNoteItem(Number(req.params.id), body.content || '', body.parent_id, body.icon);
   res.json({ success: true });
 });
 
