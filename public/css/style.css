@@ -2795,6 +2795,9 @@ a { color: var(--primary); text-decoration: none; }
   transition: box-shadow 0.2s, border-color 0.2s;
   display: flex;
   flex-direction: column;
+  /* 默认最小尺寸，防止 cardSizes 未写入时塌缩为 0 */
+  min-width: 200px;
+  min-height: 120px;
 }
 .note-card:hover {
   border-color: var(--primary-light);

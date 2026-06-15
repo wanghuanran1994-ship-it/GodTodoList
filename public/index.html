@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GodTodoList - 事项管理体系</title>
-  <link rel="stylesheet" href="/css/style.css?v=33">
+  <link rel="stylesheet" href="/css/style.css?v=35">
 </head>
 <body>
   <div id="app">
@@ -641,7 +641,12 @@
           <div v-if="filteredNoteCards.length" class="notes-grid">
             <div v-for="card in filteredNoteCards" :key="card.id" class="note-card"
                  :data-card-id="card.id"
-                 :style="cardSizes[card.id] ? { width: cardSizes[card.id].w + 'px', height: cardSizes[card.id].h + 'px' } : {}">
+                 :style="cardSizes[card.id] && cardSizes[card.id].w ? {
+                   width: cardSizes[card.id].w + 'px',
+                   height: (cardSizes[card.id].h || 120) + 'px',
+                   minWidth: Math.max(cardSizes[card.id].mw || 200, 200) + 'px',
+                   minHeight: Math.max(cardSizes[card.id].mh || 120, 120) + 'px'
+                 } : { minWidth: '200px', minHeight: '120px' }">
               <div class="note-card-header">
                 <span class="note-card-category" :style="{ color: (NOTE_CATEGORIES.find(c => c.key === (card.category || '随手记')) || NOTE_CATEGORIES[0]).color }"
                       @click.stop="cycleCardCategory(card)" title="点击切换分类">
@@ -1738,6 +1743,6 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
-  <script src="/js/app.js?v=59"></script>
+  <script src="/js/app.js?v=61"></script>
 </body>
 </html>

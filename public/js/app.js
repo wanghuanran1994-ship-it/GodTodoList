@@ -359,7 +359,12 @@ createApp({
       if (!text) return;
       const catKey = bubbleInput.categoryKey;
       // 始终创建新卡片
-      await api('/api/note-cards', { method: 'POST', body: { category: catKey, content: text } });
+      const result = await api('/api/note-cards', { method: 'POST', body: { category: catKey, content: text } });
+      // 为新卡片立即预留默认尺寸，防止 applyCardMinSizes 的 setTimeout 150ms 期间
+      // 用户切换分类导致 cardSizes 未及时写入，从而 :style 返回 {} → 卡片塌缩
+      if (result?.id) {
+        cardSizes.value[result.id] = { w: 320, h: 180, mw: 200, mh: 120 };
+      }
       filterNoteCategory.value = null; // 切回"全部"，避免卡被筛掉
       await loadNoteCards();
       dismissBubbleInput();
@@ -374,7 +379,21 @@ createApp({
     function loadCardSizes() {
       try {
         const saved = localStorage.getItem('noteCardSizes');
-        if (saved) cardSizes.value = JSON.parse(saved);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          // 旧版本数据可能缺少 mw/mh 字段，补全为 0（首次访问时由 applyCardMinSizes 计算）
+          for (const id of Object.keys(parsed)) {
+            if (parsed[id] && typeof parsed[id] === 'object') {
+              if (parsed[id].mw === undefined) parsed[id].mw = 0;
+              if (parsed[id].mh === undefined) parsed[id].mh = 0;
+              // 防御性：过滤掉无效数据
+              if (!parsed[id].w || parsed[id].w < 0) delete parsed[id];
+            } else {
+              delete parsed[id];
+            }
+          }
+          cardSizes.value = parsed;
+        }
       } catch (e) { /* ignore */ }
     }
     function saveCardSizesFromDOM() {
@@ -385,7 +404,11 @@ createApp({
         const r = el.getBoundingClientRect();
         const w = Math.round(r.width);
         const h = Math.round(r.height);
-        if (w > 0 && h > 0) sizes[cardId] = { w, h };
+        if (w > 0 && h > 0) {
+          // 保留已存的 mw/mh（从 cardSizes reactive 读）
+          const saved = cardSizes.value[cardId] || {};
+          sizes[cardId] = { w, h, mw: saved.mw || 0, mh: saved.mh || 0 };
+        }
       });
       localStorage.setItem('noteCardSizes', JSON.stringify(sizes));
     }
@@ -396,17 +419,20 @@ createApp({
         // 从 cardSizes reactive 状态保存，移除宽高为 0 的条目
         const sizes = {};
         for (const [id, s] of Object.entries(cardSizes.value)) {
-          if (s && s.w > 0) sizes[id] = { w: s.w, h: s.h || 0 };
+          if (s && s.w > 0) {
+            sizes[id] = { w: s.w, h: s.h || 0, mw: s.mw || 0, mh: s.mh || 0 };
+          }
         }
         localStorage.setItem('noteCardSizes', JSON.stringify(sizes));
       }, 100);
     }
     let cardResizeObserver = null;
 
-    function updateCardMinHeight(el) {
+    function calcCardMinHeight(el) {
       // 临时把 .note-items 的 flex 伸缩和 overflow 裁切解除，
       // 得到真实内容高度，否则 flex: 1 拉伸后 scrollHeight 会包含
       // 被拉伸的多余空间，导致 minHeight 偏大。
+      // 返回数值（px），不再直接设置 el.style.minHeight —— 改由 Vue :style 应用
       let contentH = 0;
       const itemsEl = el.querySelector('.note-items');
       let itemsRealH = 0;
@@ -428,13 +454,58 @@ createApp({
       const borderBot = parseFloat(cs.borderBottomWidth) || 0;
       const padTop = parseFloat(cs.paddingTop) || 0;
       const padBot = parseFloat(cs.paddingBottom) || 0;
-      el.style.minHeight = (contentH + padTop + padBot + borderTop + borderBot) + 'px';
+      // 兜底 120px，防止 contentH=0 时 minHeight=0 导致 :style minHeight:0px 覆盖 CSS 默认值
+      return Math.max(contentH + padTop + padBot + borderTop + borderBot, 120);
     }
 
     function calcCardMinWidth(el) {
-      // 只以 header 的自然宽度为准，条目内容换行适应即可
+      // 测量"完整标题文本宽度 + 其他 header 子元素宽度"，作为卡片最小宽度。
+      // 这样无论用户怎么缩小，标题文字都能完整显示，且不会过度预留空间。
       const header = el.querySelector('.note-card-header');
-      return header ? header.scrollWidth : 0;
+      if (!header) return 200; // 兜底
+      const titleEl = header.querySelector('.note-card-title');
+
+      // 1. 测量标题完整文本宽度（克隆法）
+      let titleFullW = 0;
+      if (titleEl) {
+        const tcs = getComputedStyle(titleEl);
+        const span = document.createElement('span');
+        span.style.fontSize = tcs.fontSize;
+        span.style.fontWeight = tcs.fontWeight;
+        span.style.fontFamily = tcs.fontFamily;
+        span.style.letterSpacing = tcs.letterSpacing;
+        span.style.position = 'absolute';
+        span.style.visibility = 'hidden';
+        span.style.whiteSpace = 'nowrap';
+        span.textContent = titleEl.value || '未命名';
+        document.body.appendChild(span);
+        const tpadL = parseFloat(tcs.paddingLeft) || 0;
+        const tpadR = parseFloat(tcs.paddingRight) || 0;
+        titleFullW = span.offsetWidth + tpadL + tpadR + 2;
+        document.body.removeChild(span);
+      }
+
+      // 2. 累加其他子元素的实际宽度
+      let otherW = 0;
+      let otherCount = 0;
+      for (const child of header.children) {
+        if (child !== titleEl) {
+          otherW += child.offsetWidth;
+          otherCount++;
+        }
+      }
+
+      // 3. 加上 gap（子元素总数 - 1 个 gap）和 header padding
+      const hcs = getComputedStyle(header);
+      const gap = parseFloat(hcs.gap) || 6;
+      const padL = parseFloat(hcs.paddingLeft) || 0;
+      const padR = parseFloat(hcs.paddingRight) || 0;
+      const totalChildren = (titleEl ? 1 : 0) + otherCount;
+      const totalGaps = totalChildren > 1 ? (totalChildren - 1) * gap : 0;
+
+      // 加 2px 容差 + 卡片 border（左右各 1px）
+      // 兜底 200px，防止测量异常返回 0 被 :style minWidth:0px 覆盖 CSS 默认值
+      return Math.max(titleFullW + otherW + totalGaps + padL + padR + 2, 200);
     }
 
     function fitTitleWidth(input) {
@@ -474,18 +545,21 @@ createApp({
             const oldH = parseFloat(entry.target.dataset.lastHeight) || 0;
             const wChanged = Math.abs(newW - oldW) > 0.5;
             const hChanged = Math.abs(newH - oldH) > 0.5;
-            if (wChanged) {
-              entry.target.dataset.lastWidth = newW;
-              updateCardMinHeight(entry.target);
-            }
-            if (wChanged || hChanged) {
-              entry.target.dataset.lastHeight = newH;
-              const cardId = entry.target.dataset.cardId;
-              if (cardId) {
-                cardSizes.value[cardId] = { w: newW, h: newH };
-                debouncedSaveCardSizes();
-              }
-            }
+            const cardId = entry.target.dataset.cardId;
+            if (!cardId) continue;
+            if (!wChanged && !hChanged) continue;
+            entry.target.dataset.lastWidth = newW;
+            entry.target.dataset.lastHeight = newH;
+            const cur = cardSizes.value[cardId] || {};
+            const mw = cur.mw || calcCardMinWidth(entry.target);
+            // 宽度变化 → 内容回流 → 重算 minHeight；高度变化 → 直接复用旧 mh
+            const mh = wChanged ? calcCardMinHeight(entry.target) : (cur.mh || calcCardMinHeight(entry.target));
+            // 只有尺寸真正变化（>1px）才写持久化值，避免测量噪声无限循环
+            const sameW = cur.w && Math.abs(newW - cur.w) <= 1;
+            const sameH = cur.h && Math.abs(newH - cur.h) <= 1;
+            if (sameW && sameH && cur.mw === mw && cur.mh === mh) continue;
+            cardSizes.value[cardId] = { w: newW, h: newH, mw, mh };
+            debouncedSaveCardSizes();
           }
         });
         // 先读取所有卡片的实际 DOM 尺寸，防止后续测量覆盖用户已拖动的尺寸
@@ -498,38 +572,38 @@ createApp({
             domSizes[id] = { w: Math.round(r.width), h: Math.round(r.height) };
           }
         });
-        // 收标题宽度，再用 width:0 溢出法测量 header 最小宽度
-        // 卡片 width=0 时，flex-shrink:0 的子元素维持原宽，
-        // 标题 flex-shrink:1 缩到 min-width:2em，header.scrollWidth = 不换行最小宽度
+        // 1. 先把所有标题宽度 fit 好
         fitAllTitleWidths();
+        // 2. 测量每张卡片的 minWidth / minHeight，并写入 cardSizes
         document.querySelectorAll('.note-card').forEach(el => {
-          updateCardMinHeight(el);
-          const header = el.querySelector('.note-card-header');
-          let hw = 300;
-          if (header) {
-            const prevW = el.style.width;
-            const prevOY = el.style.overflowY;
-            el.style.width = '0';
-            el.style.overflowY = 'visible';
-            void el.offsetHeight;
-            hw = header.scrollWidth + 2; // +2 卡片 border
-            el.style.width = prevW;
-            el.style.overflowY = prevOY;
-          }
-          el.style.minWidth = hw + 'px';
           const cardId = el.dataset.cardId;
-          if (cardId) {
-            const saved = cardSizes.value[cardId];
-            if (!saved || !saved.w) {
-              // 新卡片：用实际 DOM 尺寸（用户可能已拖动），不低于 minWidth
-              const cur = domSizes[cardId];
-              const w = Math.max(cur?.w || 0, hw);
-              const h = cur?.h || 0;
-              cardSizes.value[cardId] = { w, h };
+          if (!cardId) return;
+          const mw = calcCardMinWidth(el);
+          const mh = calcCardMinHeight(el);
+          const saved = cardSizes.value[cardId];
+          const cur = domSizes[cardId];
+          if (!saved || !saved.w) {
+            // 新卡片：用实际 DOM 尺寸（用户可能已拖动），不低于 minWidth
+            const w = Math.max(cur?.w || 0, mw);
+            const h = Math.max(cur?.h || 0, mh);
+            cardSizes.value[cardId] = { w, h, mw, mh };
+            debouncedSaveCardSizes();
+          } else {
+            // 已有保存尺寸：优先用 DOM 当前尺寸（用户可能在 setTimeout 150ms 期间拖动了卡片，
+            // 此时 saved 的 w/h 是旧值，会覆盖用户最新的拖动 → "跳回" bug）
+            // 如果 DOM 尺寸 == saved 尺寸（用户没拖动），赋值相同值不会触发响应式
+            const dw = cur?.w ?? saved.w;
+            const dh = cur?.h ?? saved.h;
+            if (saved.w !== dw || saved.h !== dh || saved.mw !== mw || saved.mh !== mh) {
+              cardSizes.value[cardId] = { w: dw, h: dh, mw, mh };
+              debouncedSaveCardSizes();
             }
-            // 已有保存尺寸：不动，保持用户设置的值。
-            // minWidth 已设到元素上，确保不会太小。
           }
+          // 同步 lastWidth/lastHeight 到当前实际值，避免 ResizeObserver 误判变化
+          const r = el.getBoundingClientRect();
+          el.dataset.lastWidth = Math.round(r.width);
+          el.dataset.lastHeight = Math.round(r.height);
+          el.dataset.observed = '1';
           cardResizeObserver.observe(el);
         });
       }, 150);
@@ -2493,6 +2567,15 @@ createApp({
     }
     async function renameCard(cardId, title) {
       await api(`/api/note-cards/${cardId}`, { method: 'PUT', body: { title: title?.trim() || '未命名' } });
+      // 标题变化 → 重算该卡片 minWidth，否则缩小卡片时标题会被裁切
+      nextTick(() => {
+        const el = document.querySelector(`.note-card[data-card-id="${cardId}"]`);
+        if (el && cardSizes.value[cardId]) {
+          const mw = calcCardMinWidth(el);
+          cardSizes.value[cardId] = { ...cardSizes.value[cardId], mw };
+          debouncedSaveCardSizes();
+        }
+      });
     }
     async function updateCardCategory(cardId, category) {
       await api(`/api/note-cards/${cardId}`, { method: 'PUT', body: { category } });
@@ -2506,6 +2589,8 @@ createApp({
     }
     async function deleteCard(cardId) {
       await api(`/api/note-cards/${cardId}`, { method: 'DELETE' });
+      // 清理 cardSizes 缓存，避免 localStorage 残留已删除卡片的尺寸数据
+      delete cardSizes.value[cardId];
       await loadNoteCards();
     }
     async function addItem(cardId, parentId) {
@@ -3715,6 +3800,44 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
     // 启动定时刷新计时器显示
     onMounted(async () => {
       loadCardSizes();
+      // 监听过滤变化（切换分类胶囊、新增/删除卡片等），重新 observe 新出现的 DOM 元素。
+      // 没有这个 watch 的话，Vue 重创建元素后 ResizeObserver 会失效，
+      // 用户拖动卡片尺寸不会被记录。
+      watch(filteredNoteCards, () => {
+        nextTick(() => {
+          // 切换分类后，对新出现的 DOM 元素重新 fit 标题宽度（input.style.width 在 Vue 重创建时丢失）
+          document.querySelectorAll('.note-card').forEach(el => {
+            if (el.dataset.observed === '1') return;
+            el.dataset.observed = '1';
+            // 重新 fit 标题
+            const titleInput = el.querySelector('.note-card-title');
+            if (titleInput) fitTitleWidth(titleInput);
+            const r = el.getBoundingClientRect();
+            el.dataset.lastWidth = Math.round(r.width);
+            el.dataset.lastHeight = Math.round(r.height);
+            // 新卡片可能在 cardSizes 中还没有条目，补一次测量
+            const cardId = el.dataset.cardId;
+            if (cardId && !cardSizes.value[cardId]) {
+              const mw = calcCardMinWidth(el);
+              const mh = calcCardMinHeight(el);
+              cardSizes.value[cardId] = {
+                w: Math.max(Math.round(r.width), mw),
+                h: Math.max(Math.round(r.height), mh),
+                mw, mh
+              };
+            } else if (cardId && cardSizes.value[cardId]) {
+              // 已有 cardSizes：刷新 mw/mh（内容或标题可能变化）
+              const mw = calcCardMinWidth(el);
+              const mh = calcCardMinHeight(el);
+              const cur = cardSizes.value[cardId];
+              if (cur.mw !== mw || cur.mh !== mh) {
+                cardSizes.value[cardId] = { ...cur, mw, mh };
+              }
+            }
+            if (cardResizeObserver) cardResizeObserver.observe(el);
+          });
+        });
+      });
       window.addEventListener('beforeunload', saveCardSizesFromDOM);
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') saveCardSizesFromDOM();
