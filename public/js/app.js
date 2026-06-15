@@ -387,6 +387,18 @@ createApp({
       });
       localStorage.setItem('noteCardSizes', JSON.stringify(sizes));
     }
+    let saveCardSizesTimer = null;
+    function debouncedSaveCardSizes() {
+      clearTimeout(saveCardSizesTimer);
+      saveCardSizesTimer = setTimeout(() => {
+        // 从 cardSizes reactive 状态保存，移除宽高为 0 的条目
+        const sizes = {};
+        for (const [id, s] of Object.entries(cardSizes.value)) {
+          if (s && s.w > 0) sizes[id] = { w: s.w, h: s.h || 0 };
+        }
+        localStorage.setItem('noteCardSizes', JSON.stringify(sizes));
+      }, 300);
+    }
     let cardResizeObserver = null;
 
     function updateCardMinHeight(el) {
@@ -451,46 +463,58 @@ createApp({
         if (cardResizeObserver) cardResizeObserver.disconnect();
         cardResizeObserver = new ResizeObserver((entries) => {
           for (const entry of entries) {
-            // 只在宽度变化时重算 minHeight —— 宽度影响文字换行，
-            // 换行影响内容高度。纯高度变化不需要重算，也能避免循环。
             const newW = entry.contentBoxSize[0].inlineSize;
+            const newH = entry.contentBoxSize[0].blockSize;
             const oldW = parseFloat(entry.target.dataset.lastWidth) || 0;
-            if (Math.abs(newW - oldW) > 0.5) {
+            const oldH = parseFloat(entry.target.dataset.lastHeight) || 0;
+            const wChanged = Math.abs(newW - oldW) > 0.5;
+            const hChanged = Math.abs(newH - oldH) > 0.5;
+            if (wChanged) {
               entry.target.dataset.lastWidth = Math.round(newW);
               updateCardMinHeight(entry.target);
             }
+            // 任何尺寸变化 → 同步到 reactive 状态 → 自动保存
+            if (wChanged || hChanged) {
+              entry.target.dataset.lastHeight = Math.round(newH);
+              const cardId = entry.target.dataset.cardId;
+              if (cardId) {
+                cardSizes.value[cardId] = { w: Math.round(newW), h: Math.round(newH) };
+                debouncedSaveCardSizes();
+              }
+            }
           }
         });
-        // 先收标题宽度到文字大小，再用离屏克隆法测量 header 自然宽度，
-        // 避免父容器宽度约束导致子元素收缩，确保 minWidth 足够大防止换行
+        // 先收标题宽度到文字大小，再用 width:0 溢出法测量 header 最小宽度
+        // 卡片 width=0 时，flex-shrink:0 的子元素维持原宽，
+        // 标题 flex-shrink:1 缩到 min-width:2em，header.scrollWidth = 不换行最小宽度
         fitAllTitleWidths();
-        const measureBox = document.createElement('div');
-        measureBox.style.cssText = 'position:absolute;visibility:hidden;width:max-content;top:-9999px;left:0;';
-        document.body.appendChild(measureBox);
         document.querySelectorAll('.note-card').forEach(el => {
           updateCardMinHeight(el);
           const header = el.querySelector('.note-card-header');
           let hw = 300;
           if (header) {
-            const clone = header.cloneNode(true);
-            // 强制所有子元素不收缩，测出不换行的完整宽度
-            for (const child of clone.children) {
-              child.style.flexShrink = '0';
-            }
-            measureBox.appendChild(clone);
-            hw = clone.scrollWidth + 2; // +2 卡片 border
-            measureBox.removeChild(clone);
+            const prevW = el.style.width;
+            const prevOY = el.style.overflowY;
+            el.style.width = '0';
+            el.style.overflowY = 'visible';
+            void el.offsetHeight;
+            hw = header.scrollWidth + 2; // +2 卡片 border
+            el.style.width = prevW;
+            el.style.overflowY = prevOY;
           }
           el.style.minWidth = hw + 'px';
-          el.style.width = hw + 'px';
           const cardId = el.dataset.cardId;
           if (cardId) {
-            const oldH = cardSizes.value[cardId]?.h;
-            cardSizes.value[cardId] = { w: hw, h: oldH || 0 };
+            const saved = cardSizes.value[cardId];
+            if (!saved || !saved.w) {
+              // 新卡片：初始宽度 = minWidth，高度由 minHeight 控制
+              cardSizes.value[cardId] = { w: hw, h: 0 };
+            }
+            // 已有保存尺寸：不动，保持用户设置的值。
+            // minWidth 已设到元素上，确保不会太小。
           }
           cardResizeObserver.observe(el);
         });
-        document.body.removeChild(measureBox);
       }, 150);
     }
 
@@ -663,7 +687,7 @@ createApp({
     }
 
     async function loadAll() {
-      await Promise.all([loadGoals(), loadRoutines(), loadTasks(), loadTags(), loadSettings(), loadContacts(), refreshTimers()]);
+      await Promise.all([loadGoals(), loadRoutines(), loadTasks(), loadTags(), loadSettings(), loadContacts(), loadNoteCards(), refreshTimers()]);
       loadNoteConversations();
     }
 

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GodTodoList - 事项管理体系</title>
-  <link rel="stylesheet" href="/css/style.css?v=32">
+  <link rel="stylesheet" href="/css/style.css?v=33">
 </head>
 <body>
   <div id="app">
@@ -608,7 +608,7 @@
 
         <div class="notes-content">
           <!-- 分类筛选 -->
-          <div class="notes-filter" v-if="noteCards.length">
+          <div class="notes-filter">
             <button class="notes-filter-btn" :class="{ active: filterNoteCategory === null }" @click="filterNoteCategory = null">全部</button>
             <button v-for="cat in NOTE_CATEGORIES" :key="cat.key"
                     class="notes-filter-btn"
@@ -1738,6 +1738,6 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
-  <script src="/js/app.js?v=52"></script>
+  <script src="/js/app.js?v=56"></script>
 </body>
 </html>
