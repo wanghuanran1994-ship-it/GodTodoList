@@ -574,6 +574,10 @@ createApp({
             const rect = entry.target.getBoundingClientRect();
             const newW = Math.round(rect.width);
             const newH = Math.round(rect.height);
+            // 关键修复：元素被 Vue 销毁时（切换胶囊/删除卡片），ResizeObserver 会最后一次触发
+            // 此时 getBoundingClientRect 返回 0×0，如果不过滤会把 w:0/h:0 写入 cardSizes，
+            // 导致下次切换回来时 :style 应用 width:0，卡片塌缩成 minWidth×minHeight
+            if (newW === 0 || newH === 0) continue;
             const oldW = parseFloat(entry.target.dataset.lastWidth) || 0;
             const oldH = parseFloat(entry.target.dataset.lastHeight) || 0;
             const wChanged = Math.abs(newW - oldW) > 0.5;
@@ -3872,12 +3876,15 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
             // 重新 fit 标题
             const titleInput = el.querySelector('.note-card-title');
             if (titleInput) fitTitleWidth(titleInput);
+            const cardId = el.dataset.cardId;
+            const saved = cardId ? cardSizes.value[cardId] : null;
+            // 关键：先确认 Vue 已经把 :style 应用到 DOM（cardSizes.w 与实际宽度一致）
+            // 否则下面读到的 r.width 可能是错误值（被 minWidth 撑大或还没应用）
             const r = el.getBoundingClientRect();
             el.dataset.lastWidth = Math.round(r.width);
             el.dataset.lastHeight = Math.round(r.height);
             // 新卡片可能在 cardSizes 中还没有条目，补一次测量
-            const cardId = el.dataset.cardId;
-            if (cardId && !cardSizes.value[cardId]) {
+            if (cardId && !saved) {
               const mw = calcCardMinWidth(el);
               const mh = calcCardMinHeight(el);
               cardSizes.value[cardId] = {
@@ -3885,13 +3892,12 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
                 h: Math.max(Math.round(r.height), mh),
                 mw, mh
               };
-            } else if (cardId && cardSizes.value[cardId]) {
-              // 已有 cardSizes：刷新 mw/mh（内容或标题可能变化）
+            } else if (cardId && saved) {
+              // 已有 cardSizes：仅刷新 mw/mh（内容或标题可能变化），保留用户拖动的 w/h
               const mw = calcCardMinWidth(el);
               const mh = calcCardMinHeight(el);
-              const cur = cardSizes.value[cardId];
-              if (cur.mw !== mw || cur.mh !== mh) {
-                cardSizes.value[cardId] = { ...cur, mw, mh };
+              if (saved.mw !== mw || saved.mh !== mh) {
+                cardSizes.value[cardId] = { ...saved, mw, mh };
               }
             }
             if (cardResizeObserver) cardResizeObserver.observe(el);
