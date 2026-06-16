@@ -4,10 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GodTodoList - 事项管理体系</title>
-  <link rel="stylesheet" href="/css/style.css?v=37">
+  <link rel="stylesheet" href="/css/style.css?v=53">
 </head>
 <body>
-  <div id="app">
+  <!-- 页面加载过渡：Vue 接管前显示，避免 v-if 弹窗闪烁 -->
+  <div id="app-loader">
+    <div class="loader-breath"><span></span><span></span><span></span></div>
+    <div class="loader-title">GodTodoList</div>
+    <div class="loader-sub">正在唤醒你的任务…</div>
+  </div>
+  <div id="app" v-cloak>
     <!-- 侧边栏 -->
     <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
       <div class="sidebar-header">
@@ -261,24 +267,17 @@
           </div>
         </div>
 
-        <!-- 快速输入栏 -->
+        <!-- 快速输入栏：输入描述，点创建进入弹窗后用 AI 推理属性 -->
         <div class="quick-input-bar">
           <div class="quick-input-main">
             <input type="text" v-model="quickInputText" class="quick-input-field"
-                   placeholder="快速创建任务... 支持 @明天 #标签 +人名 !2(时间) 🔥(今日)"
+                   placeholder="用一句话描述任务，点创建后可用 AI 推理属性..."
                    @keydown.enter="createFromQuickInput">
             <button class="btn btn-primary quick-create-btn" @click="createFromQuickInput"
                     :disabled="!quickInputText.trim()">创建</button>
           </div>
-          <div class="quick-input-preview" v-if="quickInputParsed && quickInputText.trim()">
-            <span class="parsed-tag" v-if="quickInputParsed.title">📝 {{ quickInputParsed.title }}</span>
-            <span class="parsed-tag date" v-if="quickInputParsed.due_date">📅 {{ quickInputParsed.due_date }}</span>
-            <span class="parsed-tag tag" v-for="tid in quickInputParsed.tag_ids" :key="tid">
-              #{{ tags.find(t => t.id === tid)?.name || tid }}
-            </span>
-            <span class="parsed-tag person" v-for="p in quickInputParsed.people" :key="p">👤 {{ p }}</span>
-            <span class="parsed-tag time" v-if="quickInputParsed.estimated_time">⏱ {{ formatTime(quickInputParsed.estimated_time) }}</span>
-            <span class="parsed-tag today" v-if="quickInputParsed.is_today">🔥 今日必做</span>
+          <div class="quick-input-preview" v-if="quickInputText.trim()">
+            <span class="parsed-tag">📝 将作为任务描述填入弹窗</span>
           </div>
         </div>
 
@@ -538,7 +537,7 @@
           <h1 class="view-title">🔄 惯例</h1>
           <div class="header-actions">
             <button class="btn btn-sm" @click="showRoutineModal = true">＋ 新建惯例</button>
-            <button class="btn btn-primary" @click="newTask.is_report = true; showQuickAdd = true">＋ 新建汇报任务</button>
+            <button class="btn btn-primary" @click="openQuickAddReport">＋ 新建汇报任务</button>
           </div>
         </div>
 
@@ -972,8 +971,9 @@
               <input type="password" v-model="aiConfigs[activeAIConfig].api_key" class="input" placeholder="sk-...">
             </div>
             <div class="form-group" v-if="aiConfigs[activeAIConfig].provider === 'openai'">
-              <label>X-Token</label>
-              <input type="password" v-model="aiConfigs[activeAIConfig].x_token" class="input" placeholder="可选">
+              <label>X-Auth-Token（公司网关用，可选）</label>
+              <input type="password" v-model="aiConfigs[activeAIConfig].x_token" class="input" placeholder="如需 x-auth-token 鉴权则填这里">
+              <p class="form-hint">填写后会同时发送 <code>X-Token</code> 和 <code>x-auth-token</code> 两个 header，兼容公司 OpenAI 网关。若公司网关拒绝 <code>Authorization: Bearer</code>，请把上面的 API Key 留空。</p>
             </div>
             <div class="ai-config-save-row">
               <button class="btn btn-primary" @click="saveAIConfigs">💾 保存配置</button>
@@ -1079,81 +1079,16 @@
     </main>
 
     <!-- ========== 右侧详情面板 ========== -->
-    <aside class="detail-panel" v-if="selectedTask" :class="{ open: !!selectedTask }">
-      <div class="detail-header">
-        <h2 class="detail-title">任务详情</h2>
-        <button class="btn-icon close-btn" @click="closeDetail">×</button>
-      </div>
-      <div class="detail-body">
-        <!-- AI 建议 -->
-        <div class="ai-suggestion-card" v-if="aiSuggestions && aiSuggestions._taskId === selectedTask.id">
-          <div class="ai-suggestion-header">
-            <span>🤖 AI 建议（可编辑）</span>
-            <button class="btn-icon" @click="dismissAISuggestions">×</button>
-          </div>
-          <div class="ai-suggestion-body">
-            <div class="ai-suggest-item">
-              <span class="ai-suggest-label">任务名</span>
-              <input type="text" v-model="aiSuggestions.title" class="input ai-suggest-input">
-            </div>
-            <div class="ai-suggest-item">
-              <span class="ai-suggest-label">描述</span>
-              <input type="text" v-model="aiSuggestions.description" class="input ai-suggest-input">
-            </div>
-            <div class="ai-suggest-item" v-if="aiSuggestions.estimated_time != null">
-              <span class="ai-suggest-label">预估</span>
-              <span v-if="!aiSuggestions._editingTime" style="color:var(--primary);font-weight:600;font-size:var(--text-sm);cursor:pointer"
-                    @click="aiSuggestions._editingTime = true">{{ formatTime(aiSuggestions.estimated_time) }}</span>
-              <input v-else type="number" v-model.number="aiSuggestions.estimated_time" class="input ai-suggest-input"
-                     min="0" @blur="aiSuggestions._editingTime = false" ref="aiTimeInput">
-            </div>
-            <div v-if="!selectedTask.folder_path" style="display:flex;gap:8px;font-size:var(--text-sm);margin-bottom:2px">
-              <span class="ai-suggest-label" style="padding-top:4px">📁 目录</span>
-              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:5px">
-                <!-- 未选已有目录：显示新建输入 -->
-                <template v-if="!aiSuggestions.reuse_folder_path">
-                  <div style="display:flex;align-items:center;gap:4px">
-                    <input type="text" v-model="aiSuggestions.folder_name" class="input ai-suggest-input"
-                           placeholder="新目录名（在根目录下创建）" style="flex:1">
-                    <button class="btn btn-xs" @click="aiPickFolder">📂 选择已有目录</button>
-                  </div>
-                </template>
-                <!-- 已选已有目录：显示路径，隐藏新建 -->
-                <div v-else style="font-size:11px;color:var(--success);word-break:break-all;display:flex;align-items:center;gap:4px">
-                  ✅ {{ aiSuggestions.reuse_folder_path }}
-                  <button style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-3)" @click="aiSuggestions.reuse_folder_path = ''">× 清除</button>
-                </div>
-              </div>
-            </div>
-            <div class="ai-suggest-item" v-if="aiSuggestions.tag_ids && aiSuggestions.tag_ids.length">
-              <span class="ai-suggest-label">标签</span>
-              <span class="ai-suggest-value">
-                <span class="tag-pill selectable" v-for="(tid, ti) in aiSuggestions.tag_ids" :key="tid"
-                      :style="{ background: (tags.find(t=>t.id===tid)?.color||'#888')+'18', color: tags.find(t=>t.id===tid)?.color||'var(--text-3)' }"
-                      @click="aiSuggestions.tag_ids.splice(ti, 1)">
-                  {{ tags.find(t => t.id === tid)?.icon }}{{ tags.find(t => t.id === tid)?.name || tid }} ×
-                </span>
-              </span>
-            </div>
-            <div class="ai-suggest-item" v-if="aiSuggestions.subtasks && aiSuggestions.subtasks.length">
-              <span class="ai-suggest-label">子任务</span>
-              <div class="ai-suggest-subtasks">
-                <div class="ai-subtask-row" v-for="(st, si) in aiSuggestions.subtasks" :key="si">
-                  <input type="text" v-model="aiSuggestions.subtasks[si]" class="input ai-suggest-input">
-                  <button class="btn-icon btn-danger-icon btn-xs" @click="aiSuggestions.subtasks.splice(si, 1)">×</button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="ai-suggestion-actions">
-            <button class="btn btn-sm btn-primary" @click="applyAISuggestions">应用</button>
-            <button class="btn btn-sm" @click="dismissAISuggestions">忽略</button>
-          </div>
+    <div class="modal-overlay" v-if="selectedTask" @click.self="closeDetail">
+      <div class="modal task-detail-modal">
+        <!-- 顶部：标题（可编辑）+ 关闭 -->
+        <div class="task-detail-header">
+          <input type="text" v-model="selectedTask.title" class="task-detail-title-input"
+                 @blur="saveSelectedTask" placeholder="任务标题">
+          <button class="btn-icon" @click="closeDetail">×</button>
         </div>
-
-        <!-- 状态 -->
-        <div class="detail-section">
-          <label>状态</label>
+        <!-- 状态行（固定始终可见） -->
+        <div class="task-detail-status">
           <div class="status-buttons">
             <button class="status-btn" v-for="s in statuses" :key="s.value"
                     :class="{ active: selectedTask.status === s.value, [s.value]: true }"
@@ -1162,290 +1097,361 @@
             </button>
           </div>
         </div>
-
-        <!-- 标题 -->
-        <div class="detail-section">
-          <label>标题</label>
-          <input type="text" v-model="selectedTask.title" class="input"
-                 @blur="saveSelectedTask" placeholder="任务标题">
+        <!-- 标签页导航 -->
+        <div class="detail-tabs">
+          <button class="detail-tab" :class="{ active: activeDetailTab === 'basic' }" @click="switchDetailTab('basic')">📋 基本</button>
+          <button class="detail-tab" :class="{ active: activeDetailTab === 'assoc' }" @click="switchDetailTab('assoc')">🔗 关联</button>
+          <button class="detail-tab" :class="{ active: activeDetailTab === 'exec' }" @click="switchDetailTab('exec')">⚡ 执行</button>
+          <button class="detail-tab" :class="{ active: activeDetailTab === 'subtask' }" @click="switchDetailTab('subtask')">☑️ 拆解</button>
+          <button class="detail-tab" :class="{ active: activeDetailTab === 'asset' }" @click="switchDetailTab('asset')">📁 资料</button>
+          <button class="detail-tab" :class="{ active: activeDetailTab === 'path' }" @click="switchDetailTab('path')">📂 路径</button>
+          <button class="detail-tab" :class="{ active: activeDetailTab === 'chat' }" @click="switchDetailTab('chat')">🤖 对话</button>
         </div>
 
-        <!-- 关联目标 -->
-        <div class="detail-section">
-          <label>关联目标</label>
-          <select v-model="selectedTask.goal_id" class="select-input" @change="saveSelectedTask">
-            <option :value="null">无</option>
-            <option v-for="g in goals" :key="g.id" :value="g.id">{{ g.name }}</option>
-          </select>
-        </div>
+        <!-- 标签页内容区 -->
+        <div class="detail-tab-content">
 
-        <!-- 关联惯例 -->
-        <div class="detail-section">
-          <label>关联惯例</label>
-          <select v-model="selectedTask.routine_id" class="select-input" @change="saveSelectedTask">
-            <option :value="null">无</option>
-            <option v-for="r in routines" :key="r.id" :value="r.id">{{ r.name }}</option>
-          </select>
-        </div>
-
-        <!-- 汇报 -->
-        <div class="detail-section">
-          <label class="detail-checkbox">
-            <input type="checkbox" v-model="selectedTask.is_report" @change="saveSelectedTask" :true-value="1" :false-value="0">
-            📊 这是汇报
-          </label>
-        </div>
-        <div class="detail-section" v-if="selectedTask.is_report">
-          <label>汇报会议</label>
-          <input type="text" v-model="selectedTask.report_meeting" class="input"
-                 placeholder="如：部门周会、月度Review..."
-                 list="report-meeting-list" @blur="saveSelectedTask">
-          <datalist id="report-meeting-list">
-            <option v-for="m in reportMeetings" :key="m" :value="m">
-          </datalist>
-        </div>
-
-        <!-- 标签 -->
-        <div class="detail-section">
-          <label>标签</label>
-          <div class="detail-tags">
-            <span class="tag-pill selectable" v-for="tag in tags" :key="tag.id"
-                  :class="{ selected: isTaskTagged(tag.id) }"
-                  :style="isTaskTagged(tag.id) ? { background: tag.color + '20', color: tag.color, borderColor: tag.color } : {}"
-                  @click="toggleTaskTag(tag.id)">
-              {{ tag.icon }}{{ tag.name }}
-            </span>
-          </div>
-        </div>
-
-        <!-- 截止日期 -->
-        <div class="detail-section">
-          <label>截止日期</label>
-          <input type="date" v-model="selectedTask.due_date" class="input" @change="saveSelectedTask">
-        </div>
-
-        <!-- 相关人 -->
-        <div class="detail-section">
-          <label>相关人</label>
-          <div class="people-input-area">
-            <span class="person-badge removable" v-for="(p, i) in selectedTask.people" :key="i">
-              {{ p.name }} <span class="remove-person" @click="removePerson(i)">×</span>
-            </span>
-            <input type="text" v-model="newPerson" class="input inline-input"
-                   placeholder="输入人名回车添加"
-                   @keydown.enter="addPerson">
-          </div>
-        </div>
-
-        <!-- 时间 -->
-        <div class="detail-section">
-          <label>时间</label>
-          <div class="time-row">
-            <div class="time-field">
-              <span class="time-label">预估</span>
-              <span v-if="!timeEditing.estimated" style="font-weight:600;cursor:pointer;font-size:13px"
-                    @click="timeEditing.estimated = true">{{ formatTime(selectedTask.estimated_time) }}</span>
-              <input v-else type="number" v-model.number="selectedTask.estimated_time" class="input"
-                     @blur="timeEditing.estimated = false; saveSelectedTask()" min="0" title="分钟">
-            </div>
-            <div class="time-field">
-              <span class="time-label">实际</span>
-              <span v-if="!timeEditing.actual" style="font-weight:600;cursor:pointer;font-size:13px"
-                    @click="timeEditing.actual = true">{{ formatTime(selectedTask.actual_time) }}</span>
-              <input v-else type="number" v-model.number="selectedTask.actual_time" class="input"
-                     @blur="timeEditing.actual = false; saveSelectedTask()" min="0" title="分钟">
-            </div>
-            <button class="btn btn-sm" @click="showTimeLog = !showTimeLog">记录</button>
-          </div>
-          <div class="time-log-input" v-if="showTimeLog">
-            <input type="number" v-model.number="timeLogDuration" class="input" placeholder="分钟" min="1">
-            <input type="text" v-model="timeLogNote" class="input" placeholder="备注">
-            <button class="btn btn-sm btn-primary" @click="logTime">添加</button>
-          </div>
-          <div class="time-log-list" v-if="selectedTask.time_logs && selectedTask.time_logs.length">
-            <div class="time-log-item" v-for="log in selectedTask.time_logs" :key="log.id">
-              <span class="log-duration">{{ formatTime(log.duration) }}</span>
-              <span class="log-note">{{ log.note }}</span>
-              <span class="log-time">{{ formatDate(log.logged_at) }}</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- 计时器 -->
-        <div class="detail-section">
-          <label>计时器</label>
-          <div class="timer-row">
-            <button class="btn btn-sm" v-if="!isTimerActive(selectedTask.id)"
-                    @click="startTaskTimer(selectedTask.id)">▶ 开始计时</button>
-            <button class="btn btn-sm btn-danger" v-else
-                    @click="stopTaskTimer(selectedTask.id)">⏹ 停止 ({{ getTimerElapsed(selectedTask.id) }})</button>
-            <button class="btn btn-sm" @click="toggleToday(selectedTask.id)"
-                    :class="{ 'btn-primary': selectedTask.is_today }">
-              🔥 {{ selectedTask.is_today ? '今日必做' : '标记今日' }}
-            </button>
-          </div>
-        </div>
-
-        <!-- 子任务 -->
-        <div class="detail-section">
-          <label>子任务</label>
-          <div class="subtask-list" v-if="selectedTask.subtasks && selectedTask.subtasks.length">
-            <div class="subtask-item" v-for="sub in selectedTask.subtasks" :key="sub.id">
-              <label class="subtask-check">
-                <input type="checkbox" :checked="sub.status === 'done'" @change="toggleSubtask(sub)">
-                <span :class="{ done: sub.status === 'done' }">{{ sub.title }}</span>
-              </label>
-              <button class="btn-icon btn-danger-icon btn-xs" @click="deleteSubtask(sub.id)">×</button>
-            </div>
-          </div>
-          <div class="subtask-add">
-            <input type="text" v-model="newSubtaskTitle" class="input inline-input"
-                   placeholder="添加子任务..." @keydown.enter="addSubtask">
-            <button class="btn btn-xs" @click="addSubtask" :disabled="!newSubtaskTitle.trim()">＋</button>
-            <button class="btn btn-xs" @click="aiDecompose" :disabled="aiDecomposing" title="AI 自动分解">
-              🤖 {{ aiDecomposing ? '分解中...' : 'AI分解' }}
-            </button>
-          </div>
-        </div>
-
-        <!-- 描述 -->
-        <div class="detail-section">
-          <label>描述</label>
-          <textarea v-model="selectedTask.description" class="textarea" rows="3"
-                    @blur="saveSelectedTask" placeholder="任务描述..."></textarea>
-        </div>
-
-        <!-- 文件资料区（拖拽区） -->
-        <div class="detail-section">
-          <label>资料文件</label>
-          <div class="drop-zone"
-               :class="{ 'drag-over': isDragging }"
-               @dragover.prevent="isDragging = true"
-               @dragleave.prevent="isDragging = false"
-               @drop.prevent="handleFileDrop"
-               @click="triggerFileInput">
-            <div class="drop-zone-content">
-              <span class="drop-icon">📎</span>
-              <p>拖拽文件到此处，或点击上传</p>
-              <p class="drop-hint">文件将自动归档到任务目录</p>
-            </div>
-            <input type="file" ref="fileInput" multiple style="display:none" @change="handleFileSelect">
-          </div>
-          <div class="attachment-list" v-if="selectedTask.attachments && selectedTask.attachments.length">
-            <div class="attachment-item" v-for="att in selectedTask.attachments" :key="att.id">
-              <span class="att-icon">{{ fileIcon(att.file_type) }}</span>
-              <span class="att-name" @click="openAttachment(att)">{{ att.file_name }}</span>
-              <span class="att-size">{{ formatSize(att.file_size) }}</span>
-              <button class="btn-icon btn-danger-icon" @click="deleteAttachment(att.id)">×</button>
-            </div>
-          </div>
-          <div class="folder-action" v-if="selectedTask.folder_path || (selectedTask.paths && selectedTask.paths.length)">
-            <button class="btn btn-sm" @click="openFolder" v-if="selectedTask.folder_path">📂 主目录</button>
-            <button class="btn btn-sm" @click="launchTerminal" v-if="selectedTask.folder_path">💻 终端</button>
-            <button class="btn btn-sm" @click="openWithEditor" v-if="selectedTask.folder_path" title="用 {{ settings.editor || 'Obsidian' }} 打开笔记">📝 笔记</button>
-            <button class="btn btn-sm btn-danger" @click="unlinkFolder" v-if="selectedTask.folder_path">取消关联</button>
-          </div>
-        </div>
-
-        <!-- 任务关联路径 -->
-        <div class="detail-section" v-if="selectedTask">
-          <label>关联路径</label>
-          <div class="path-list">
-            <!-- 主路径 -->
-            <div class="path-item path-primary" v-if="selectedTask.folder_path" style="border-left:3px solid var(--primary);padding-left:6px">
-              <span style="font-size:10px;color:var(--primary);margin-right:4px">⭐ 主</span>
-              <span class="path-name" @click="openFolder" :title="selectedTask.folder_path">{{ selectedTask.folder_path.split(/[/\\]/).pop() }}</span>
-              <span class="path-readme" v-if="pathReadmeStatus[selectedTask.folder_path]" style="font-size:10px;color:var(--text-3)" :title="'有 README'">📄</span>
-              <div style="flex:1"></div>
-              <button class="btn btn-xs" @click="openFolder">打开</button>
-              <button class="btn btn-xs" @click="checkPathReadme(selectedTask.folder_path)" title="检查 README">🔍</button>
-              <button class="btn btn-xs btn-danger" @click="unlinkFolder">解除</button>
-            </div>
-            <!-- 附加路径（可拖拽排序） -->
-            <div class="path-item" v-for="(p, pi) in (selectedTask.paths || [])" :key="pi"
-                 draggable="true"
-                 @dragstart="onPathDragStart($event, pi)"
-                 @dragover.prevent="onPathDragOver($event, pi)"
-                 @drop="onPathDrop($event, pi)"
-                 :class="{ 'path-dragging': dragPathIndex === pi, 'path-drag-over': dragPathOverIndex === pi }"
-                 style="cursor:grab">
-              <span class="drag-handle" style="font-size:10px;color:var(--text-3);margin-right:2px">⠿</span>
-              <span class="path-name" @click="openFolderFor(p)" :title="p">{{ p.split(/[/\\]/).pop() || p }}</span>
-              <span class="path-readme" v-if="pathReadmeStatus[p]" style="font-size:10px;color:var(--text-3)" :title="'有 README'">📄</span>
-              <div style="flex:1"></div>
-              <button class="btn btn-xs" @click="openFolderFor(p)">打开</button>
-              <button class="btn btn-xs" @click="setPrimaryPath(pi)" title="设为主路径">⭐</button>
-              <button class="btn btn-xs" @click="checkPathReadme(p)" title="检查 README">🔍</button>
-              <button class="btn btn-xs btn-danger" @click="removeTaskPath(selectedTask.id, pi)">×</button>
-            </div>
-            <button class="btn btn-xs" @click="openDirBrowser">＋ 添加路径</button>
-          </div>
-        </div>
-
-        <!-- 快速笔记 -->
-        <div class="detail-section" v-if="selectedTask?.folder_path">
-          <label>📝 快速笔记</label>
-          <div style="display:flex;gap:4px">
-            <input type="text" v-model="quickNote" class="input" style="flex:1;font-size:12px"
-                   placeholder="贴入链接、命令、备忘... 回车追加到 README"
-                   @keyup.enter="appendToReadme">
-            <button class="btn btn-xs btn-primary" @click="appendToReadme" :disabled="appendingNote || !quickNote.trim()">
-              {{ appendingNote ? '...' : '追加' }}
-            </button>
-          </div>
-        </div>
-
-        <!-- AI 会话 -->
-        <div class="detail-section" v-if="selectedTask">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-            <label style="margin:0">🤖 AI 会话</label>
-            <button class="btn btn-xs" @click="scanConversations(''); showScanModal = true">🔍 发现</button>
-          </div>
-          <div v-if="taskConversations.length === 0" class="conv-empty">暂无关联会话，点击"发现"扫描</div>
-          <div class="conv-list" v-else>
-            <div class="conv-item-detail" v-for="conv in taskConversations" :key="conv.id">
-              <span class="conv-tool-badge" :style="{ color: conv.tool === 'claude' ? 'var(--primary)' : 'var(--success)' }">{{ conv.tool === 'claude' ? '🟣' : '🟢' }}</span>
-              <div class="conv-info">
-                <div class="conv-title-text" :title="conv.title">{{ conv.title || conv.session_id }}</div>
-                <div class="conv-date-text">{{ conv.created_at?.slice(0, 10) || '' }}</div>
+          <!-- ========== 基本 ========== -->
+          <div class="detail-tab-pane" v-show="activeDetailTab === 'basic'">
+            <!-- AI 建议 -->
+            <div class="ai-suggestion-card" v-if="aiSuggestions && aiSuggestions._taskId === selectedTask.id">
+              <div class="ai-suggestion-header">
+                <span>🤖 AI 建议（可编辑）</span>
+                <button class="btn-icon" @click="dismissAISuggestions">×</button>
               </div>
-              <button class="btn btn-xs" @click="continueConversation(conv.id)" title="在终端继续对话">▶</button>
-              <button class="btn btn-xs btn-danger" @click="unlinkConversation(conv.id)" title="取消关联">×</button>
+              <div class="ai-suggestion-body">
+                <div class="ai-suggest-item">
+                  <span class="ai-suggest-label">任务名</span>
+                  <input type="text" v-model="aiSuggestions.title" class="input ai-suggest-input">
+                </div>
+                <div class="ai-suggest-item">
+                  <span class="ai-suggest-label">描述</span>
+                  <input type="text" v-model="aiSuggestions.description" class="input ai-suggest-input">
+                </div>
+                <div class="ai-suggest-item" v-if="aiSuggestions.estimated_time != null">
+                  <span class="ai-suggest-label">预估</span>
+                  <span v-if="!aiSuggestions._editingTime" class="time-num"
+                        @click="aiSuggestions._editingTime = true">{{ formatTime(aiSuggestions.estimated_time) }}</span>
+                  <input v-else type="number" v-model.number="aiSuggestions.estimated_time" class="input ai-suggest-input"
+                         min="0" @blur="aiSuggestions._editingTime = false" ref="aiTimeInput">
+                </div>
+                <div v-if="!selectedTask.folder_path" style="display:flex;gap:8px;font-size:var(--text-sm);margin-bottom:2px">
+                  <span class="ai-suggest-label" style="padding-top:4px">📁 目录</span>
+                  <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:5px">
+                    <template v-if="!aiSuggestions.reuse_folder_path">
+                      <div style="display:flex;align-items:center;gap:4px">
+                        <input type="text" v-model="aiSuggestions.folder_name" class="input ai-suggest-input"
+                               placeholder="新目录名（在根目录下创建）" style="flex:1">
+                        <button class="btn btn-xs" @click="aiPickFolder">📂 选择已有目录</button>
+                      </div>
+                    </template>
+                    <div v-else style="font-size:11px;color:var(--success);word-break:break-all;display:flex;align-items:center;gap:4px">
+                      ✅ {{ aiSuggestions.reuse_folder_path }}
+                      <button style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-3)" @click="aiSuggestions.reuse_folder_path = ''">× 清除</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="ai-suggest-item" v-if="aiSuggestions.tag_ids && aiSuggestions.tag_ids.length">
+                  <span class="ai-suggest-label">标签</span>
+                  <span class="ai-suggest-value">
+                    <span class="tag-pill selectable" v-for="(tid, ti) in aiSuggestions.tag_ids" :key="tid"
+                          :style="{ background: (tags.find(t=>t.id===tid)?.color||'#888')+'18', color: tags.find(t=>t.id===tid)?.color||'var(--text-3)' }"
+                          @click="aiSuggestions.tag_ids.splice(ti, 1)">
+                      {{ tags.find(t => t.id === tid)?.icon }}{{ tags.find(t => t.id === tid)?.name || tid }} ×
+                    </span>
+                  </span>
+                </div>
+                <div class="ai-suggest-item" v-if="aiSuggestions.subtasks && aiSuggestions.subtasks.length">
+                  <span class="ai-suggest-label">子任务</span>
+                  <div class="ai-suggest-subtasks">
+                    <div class="ai-subtask-row" v-for="(st, si) in aiSuggestions.subtasks" :key="si">
+                      <input type="text" v-model="aiSuggestions.subtasks[si]" class="input ai-suggest-input">
+                      <button class="btn-icon btn-danger-icon btn-xs" @click="aiSuggestions.subtasks.splice(si, 1)">×</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="ai-suggestion-actions">
+                <button class="btn btn-sm btn-primary" @click="applyAISuggestions">应用</button>
+                <button class="btn btn-sm" @click="dismissAISuggestions">忽略</button>
+              </div>
+            </div>
+
+            <div class="detail-section">
+              <label>描述</label>
+              <textarea v-model="selectedTask.description" class="textarea" rows="3"
+                        @blur="saveSelectedTask" placeholder="任务描述..."></textarea>
+            </div>
+            <div class="detail-section">
+              <label>📅 截止日期</label>
+              <input type="date" v-model="selectedTask.due_date" class="input" @change="saveSelectedTask">
+            </div>
+            <div class="detail-section">
+              <label>🏷️ 标签</label>
+              <div class="detail-tags">
+                <span class="tag-pill selectable" v-for="tag in tags" :key="tag.id"
+                      :class="{ selected: isTaskTagged(tag.id) }"
+                      :style="isTaskTagged(tag.id) ? { background: tag.color + '20', color: tag.color, borderColor: tag.color } : {}"
+                      @click="toggleTaskTag(tag.id)">
+                  {{ tag.icon }}{{ tag.name }}
+                </span>
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- 扫描会话弹窗 -->
-        <div class="modal-overlay" v-if="showScanModal" @click.self="showScanModal = false">
-          <div class="modal" style="width:480px;max-height:70vh">
-            <div class="modal-header">
-              <h3>发现 AI 会话</h3>
-              <button class="btn-icon" @click="showScanModal = false">×</button>
+          <!-- ========== 关联 ========== -->
+          <div class="detail-tab-pane" v-show="activeDetailTab === 'assoc'">
+            <div class="detail-section">
+              <div class="detail-row-2">
+                <div class="detail-field">
+                  <label>🎯 关联目标</label>
+                  <select v-model="selectedTask.goal_id" class="select-input" @change="saveSelectedTask">
+                    <option :value="null">无</option>
+                    <option v-for="g in goals" :key="g.id" :value="g.id">{{ g.name }}</option>
+                  </select>
+                </div>
+                <div class="detail-field">
+                  <label>🔁 关联惯例</label>
+                  <select v-model="selectedTask.routine_id" class="select-input" @change="saveSelectedTask">
+                    <option :value="null">无</option>
+                    <option v-for="r in routines" :key="r.id" :value="r.id">{{ r.name }}</option>
+                  </select>
+                </div>
+              </div>
             </div>
-            <div class="modal-body">
-              <div v-if="scanningConversations" style="text-align:center;padding:20px;color:var(--text-3)">扫描中...</div>
-              <div v-else-if="scanResults.length === 0" style="text-align:center;padding:20px;color:var(--text-3)">未发现相关会话</div>
-              <div v-else class="scan-list">
-                <div class="scan-item" v-for="r in scanResults" :key="r.tool + r.session_id">
-                  <span :style="{ color: r.tool === 'claude' ? 'var(--primary)' : 'var(--success)' }">{{ r.tool === 'claude' ? '🟣' : '🟢' }}</span>
-                  <div class="scan-item-info">
-                    <div class="scan-item-title">{{ r.title || r.session_id }}</div>
-                    <div class="scan-item-date">{{ r.created_at?.slice(0,10) || '' }}</div>
-                  </div>
-                  <button class="btn btn-xs btn-primary" @click="linkConversation(selectedTask.id, r); showScanModal = false">关联</button>
+            <div class="detail-section" v-if="isReportTask">
+              <label>🗣️ 汇报会议</label>
+              <input type="text" v-model="selectedTask.report_meeting" class="input"
+                     placeholder="如：部门周会、月度Review..."
+                     list="report-meeting-list" @blur="saveSelectedTask">
+              <datalist id="report-meeting-list">
+                <option v-for="m in reportMeetings" :key="m" :value="m">
+              </datalist>
+            </div>
+            <div class="detail-section">
+              <label>👥 相关人</label>
+              <div class="people-input-area">
+                <span class="person-badge removable" v-for="(p, i) in selectedTask.people" :key="i">
+                  {{ p.name }} <span class="remove-person" @click="removePerson(i)">×</span>
+                </span>
+                <input type="text" v-model="newPerson" class="input inline-input"
+                       placeholder="输入人名回车添加"
+                       @keydown.enter="addPerson">
+              </div>
+            </div>
+          </div>
+
+          <!-- ========== 执行 ========== -->
+          <div class="detail-tab-pane" v-show="activeDetailTab === 'exec'">
+            <div class="detail-section">
+              <label>计时 / 今日</label>
+              <div class="timer-row">
+                <button class="btn btn-sm" v-if="!isTimerActive(selectedTask.id)"
+                        @click="startTaskTimer(selectedTask.id)">▶ 开始计时</button>
+                <button class="btn btn-sm btn-danger" v-else
+                        @click="stopTaskTimer(selectedTask.id)">⏹ 停止 ({{ getTimerElapsed(selectedTask.id) }})</button>
+                <button class="btn btn-sm" @click="toggleToday(selectedTask.id)"
+                        :class="{ 'btn-primary': selectedTask.is_today }">
+                  🔥 {{ selectedTask.is_today ? '今日必做' : '标记今日' }}
+                </button>
+              </div>
+            </div>
+            <div class="detail-section">
+              <label>时间</label>
+              <div class="time-row">
+                <div class="time-field">
+                  <span class="time-label">预估</span>
+                  <span v-if="!timeEditing.estimated" class="time-num"
+                        @click="timeEditing.estimated = true">{{ formatTime(selectedTask.estimated_time) }}</span>
+                  <input v-else type="number" v-model.number="selectedTask.estimated_time" class="input"
+                         @blur="timeEditing.estimated = false; saveSelectedTask()" min="0" title="分钟">
+                </div>
+                <div class="time-field">
+                  <span class="time-label">实际</span>
+                  <span v-if="!timeEditing.actual" class="time-num"
+                        @click="timeEditing.actual = true">{{ formatTime(selectedTask.actual_time) }}</span>
+                  <input v-else type="number" v-model.number="selectedTask.actual_time" class="input"
+                         @blur="timeEditing.actual = false; saveSelectedTask()" min="0" title="分钟">
+                </div>
+                <button class="btn btn-sm" @click="showTimeLog = !showTimeLog">记录</button>
+              </div>
+              <div class="time-log-input" v-if="showTimeLog">
+                <input type="number" v-model.number="timeLogDuration" class="input" placeholder="分钟" min="1">
+                <input type="text" v-model="timeLogNote" class="input" placeholder="备注">
+                <button class="btn btn-sm btn-primary" @click="logTime">添加</button>
+              </div>
+              <div class="time-log-list" v-if="selectedTask.time_logs && selectedTask.time_logs.length">
+                <div class="time-log-item" v-for="log in selectedTask.time_logs" :key="log.id">
+                  <span class="log-duration">{{ formatTime(log.duration) }}</span>
+                  <span class="log-note">{{ log.note }}</span>
+                  <span class="log-time">{{ formatDate(log.logged_at) }}</span>
                 </div>
               </div>
             </div>
           </div>
+
+          <!-- ========== 拆解 ========== -->
+          <div class="detail-tab-pane" v-show="activeDetailTab === 'subtask'">
+            <div class="detail-section">
+              <div class="subtask-list" v-if="selectedTask.subtasks && selectedTask.subtasks.length">
+                <div class="subtask-item" v-for="sub in selectedTask.subtasks" :key="sub.id">
+                  <label class="subtask-check">
+                    <input type="checkbox" :checked="sub.status === 'done'" @change="toggleSubtask(sub)">
+                    <span :class="{ done: sub.status === 'done' }">{{ sub.title }}</span>
+                  </label>
+                  <button class="btn-icon btn-danger-icon btn-xs" @click="deleteSubtask(sub.id)">×</button>
+                </div>
+              </div>
+              <div class="subtask-add">
+                <input type="text" v-model="newSubtaskTitle" class="input inline-input"
+                       placeholder="添加子任务..." @keydown.enter="addSubtask">
+                <button class="btn btn-xs" @click="addSubtask" :disabled="!newSubtaskTitle.trim()">＋</button>
+                <button class="btn btn-xs" @click="aiDecompose" :disabled="aiDecomposing" title="AI 自动分解">
+                  🤖 {{ aiDecomposing ? '分解中...' : 'AI分解' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ========== 资料 ========== -->
+          <div class="detail-tab-pane" v-show="activeDetailTab === 'asset'">
+            <div class="detail-section">
+              <label>资料文件</label>
+              <div class="drop-zone"
+                   :class="{ 'drag-over': isDragging }"
+                   @dragover.prevent="isDragging = true"
+                   @dragleave.prevent="isDragging = false"
+                   @drop.prevent="handleFileDrop"
+                   @click="triggerFileInput">
+                <div class="drop-zone-content">
+                  <span class="drop-icon">📎</span>
+                  <p>拖拽文件到此处，或点击上传</p>
+                  <p class="drop-hint">文件将自动归档到任务目录</p>
+                </div>
+                <input type="file" ref="fileInput" multiple style="display:none" @change="handleFileSelect">
+              </div>
+              <div class="attachment-list" v-if="selectedTask.attachments && selectedTask.attachments.length">
+                <div class="attachment-item" v-for="att in selectedTask.attachments" :key="att.id">
+                  <span class="att-icon">{{ fileIcon(att.file_type) }}</span>
+                  <span class="att-name" @click="openAttachment(att)">{{ att.file_name }}</span>
+                  <span class="att-size">{{ formatSize(att.file_size) }}</span>
+                  <button class="btn-icon btn-danger-icon" @click="deleteAttachment(att.id)">×</button>
+                </div>
+              </div>
+              <div class="folder-action" v-if="selectedTask.folder_path || (selectedTask.paths && selectedTask.paths.length)">
+                <button class="btn btn-sm" @click="openFolder" v-if="selectedTask.folder_path">📂 主目录</button>
+                <button class="btn btn-sm" @click="launchTerminal" v-if="selectedTask.folder_path">💻 终端</button>
+                <button class="btn btn-sm" @click="openWithEditor" v-if="selectedTask.folder_path" title="用 {{ settings.editor || 'Obsidian' }} 打开笔记">📝 笔记</button>
+                <button class="btn btn-sm btn-danger" @click="unlinkFolder" v-if="selectedTask.folder_path">取消关联</button>
+              </div>
+            </div>
+            <div class="detail-section" v-if="selectedTask?.folder_path">
+              <label>📝 快速笔记</label>
+              <div style="display:flex;gap:4px">
+                <input type="text" v-model="quickNote" class="input" style="flex:1"
+                       placeholder="贴入链接、命令、备忘... 回车追加到 README"
+                       @keyup.enter="appendToReadme">
+                <button class="btn btn-xs btn-primary" @click="appendToReadme" :disabled="appendingNote || !quickNote.trim()">
+                  {{ appendingNote ? '...' : '追加' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ========== 路径 ========== -->
+          <div class="detail-tab-pane" v-show="activeDetailTab === 'path'">
+            <div class="detail-section">
+              <label>关联路径</label>
+              <div class="path-list">
+                <!-- 主路径 -->
+                <div class="path-item path-primary" v-if="selectedTask.folder_path" style="border-left:3px solid var(--primary);padding-left:6px">
+                  <span style="font-size:10px;color:var(--primary);margin-right:4px">⭐ 主</span>
+                  <span class="path-name" @click="openFolder" :title="selectedTask.folder_path">{{ selectedTask.folder_path.split(/[/\\]/).pop() }}</span>
+                  <span class="path-readme" v-if="pathReadmeStatus[selectedTask.folder_path]" style="font-size:10px;color:var(--text-3)" :title="'有 README'">📄</span>
+                  <div style="flex:1"></div>
+                  <button class="btn btn-xs" @click="openFolder">打开</button>
+                  <button class="btn btn-xs" @click="checkPathReadme(selectedTask.folder_path)" title="检查 README">🔍</button>
+                  <button class="btn btn-xs btn-danger" @click="unlinkFolder">解除</button>
+                </div>
+                <!-- 附加路径（可拖拽排序） -->
+                <div class="path-item" v-for="(p, pi) in (selectedTask.paths || [])" :key="pi"
+                     draggable="true"
+                     @dragstart="onPathDragStart($event, pi)"
+                     @dragover.prevent="onPathDragOver($event, pi)"
+                     @drop="onPathDrop($event, pi)"
+                     :class="{ 'path-dragging': dragPathIndex === pi, 'path-drag-over': dragPathOverIndex === pi }"
+                     style="cursor:grab">
+                  <span class="drag-handle" style="font-size:10px;color:var(--text-3);margin-right:2px">⠿</span>
+                  <span class="path-name" @click="openFolderFor(p)" :title="p">{{ p.split(/[/\\]/).pop() || p }}</span>
+                  <span class="path-readme" v-if="pathReadmeStatus[p]" style="font-size:10px;color:var(--text-3)" :title="'有 README'">📄</span>
+                  <div style="flex:1"></div>
+                  <button class="btn btn-xs" @click="openFolderFor(p)">打开</button>
+                  <button class="btn btn-xs" @click="setPrimaryPath(pi)" title="设为主路径">⭐</button>
+                  <button class="btn btn-xs" @click="checkPathReadme(p)" title="检查 README">🔍</button>
+                  <button class="btn btn-xs btn-danger" @click="removeTaskPath(selectedTask.id, pi)">×</button>
+                </div>
+                <button class="btn btn-xs" @click="openDirBrowser">＋ 添加路径</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ========== 对话 ========== -->
+          <div class="detail-tab-pane" v-show="activeDetailTab === 'chat'">
+            <div class="detail-section">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                <label style="margin:0">🤖 AI 会话</label>
+                <button class="btn btn-xs" @click="scanConversations(''); showScanModal = true">🔍 发现</button>
+              </div>
+              <div v-if="taskConversations.length === 0" class="conv-empty">暂无关联会话，点击"发现"扫描</div>
+              <div class="conv-list" v-else>
+                <div class="conv-item-detail" v-for="conv in taskConversations" :key="conv.id">
+                  <span class="conv-tool-badge" :style="{ color: conv.tool === 'claude' ? 'var(--primary)' : 'var(--success)' }">{{ conv.tool === 'claude' ? '🟣' : '🟢' }}</span>
+                  <div class="conv-info">
+                    <div class="conv-title-text" :title="conv.title">{{ conv.title || conv.session_id }}</div>
+                    <div class="conv-date-text">{{ conv.created_at?.slice(0, 10) || '' }}</div>
+                  </div>
+                  <button class="btn btn-xs" @click="continueConversation(conv.id)" title="在终端继续对话">▶</button>
+                  <button class="btn btn-xs btn-danger" @click="unlinkConversation(conv.id)" title="取消关联">×</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </div>
 
-        <!-- 操作 -->
-        <div class="detail-section detail-danger">
+        <!-- 底部操作 -->
+        <div class="modal-footer">
           <button class="btn" @click="copyTask(selectedTask.id)">📋 复制任务</button>
           <button class="btn btn-danger" @click="deleteSelectedTask">删除任务</button>
+          <div style="flex:1"></div>
+          <button class="btn" @click="closeDetail">关闭</button>
         </div>
       </div>
-    </aside>
+    </div>
+
+    <!-- 扫描会话弹窗（独立浮层） -->
+    <div class="modal-overlay" v-if="showScanModal" @click.self="showScanModal = false">
+      <div class="modal" style="width:480px;max-height:70vh">
+        <div class="modal-header">
+          <h3>发现 AI 会话</h3>
+          <button class="btn-icon" @click="showScanModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div v-if="scanningConversations" style="text-align:center;padding:20px;color:var(--text-3)">扫描中...</div>
+          <div v-else-if="scanResults.length === 0" style="text-align:center;padding:20px;color:var(--text-3)">未发现相关会话</div>
+          <div v-else class="scan-list">
+            <div class="scan-item" v-for="r in scanResults" :key="r.tool + r.session_id">
+              <span :style="{ color: r.tool === 'claude' ? 'var(--primary)' : 'var(--success)' }">{{ r.tool === 'claude' ? '🟣' : '🟢' }}</span>
+              <div class="scan-item-info">
+                <div class="scan-item-title">{{ r.title || r.session_id }}</div>
+                <div class="scan-item-date">{{ r.created_at?.slice(0,10) || '' }}</div>
+              </div>
+              <button class="btn btn-xs btn-primary" @click="linkConversation(selectedTask.id, r); showScanModal = false">关联</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- ========== 快速新建任务弹窗 ========== -->
     <div class="modal-overlay" v-if="showQuickAdd" @click.self="showQuickAdd = false">
@@ -1457,19 +1463,26 @@
         <div class="modal-body quick-add-body">
           <!-- 任务描述 + AI推理 -->
           <div class="form-group" style="grid-column:1/-1">
-            <label>任务描述 <span class="hint-text">先描述，AI 推理自动填充下方属性</span></label>
+            <label><i class="label-icon">📝</i>任务描述 <span class="hint-text">先描述，AI 推理自动填充下方属性</span></label>
             <textarea v-model="newTask.description" class="input quick-add-desc"
                       placeholder="用语音转文字或直接描述任务...&#10;例如：分析麒麟芯片CPU能效数据，对比竞品，输出能效曲线和优化建议"
                       rows="3" ref="quickAddInput"></textarea>
           </div>
-          <div style="grid-column:1/-1;margin-bottom:4px">
-            <button class="btn btn-sm" @click="aiInferQuickAdd" :disabled="aiInferringQuickAdd">
-              {{ aiInferringQuickAdd ? '⏳ 推理中...' : '🤖 AI 推理' }}
+          <div class="ai-infer-row" style="grid-column:1/-1;margin-bottom:4px">
+            <button class="ai-infer-btn" @click="aiInferQuickAdd" :disabled="aiInferringQuickAdd">
+              <span class="ai-infer-btn-icon">{{ aiInferringQuickAdd ? '🌀' : '✨' }}</span>
+              <span class="ai-infer-btn-text">{{ aiInferringQuickAdd ? '推理中' : 'AI 推理' }}</span>
             </button>
+            <div class="ai-infer-inline" v-if="aiInferringQuickAdd">
+              <div class="ai-infer-inline-bar">
+                <div class="ai-infer-inline-fill" :style="{ width: aiProgress.percent + '%' }"></div>
+              </div>
+              <span class="ai-infer-inline-text">{{ aiInferInlineStatus(aiProgress.percent) }}</span>
+            </div>
           </div>
           <!-- 任务名称（全宽） -->
           <div class="form-group" style="grid-column:1/-1">
-            <label>任务名称</label>
+            <label><i class="label-icon">📌</i>任务名称</label>
             <input type="text" v-model="newTask.title" class="input input-lg"
                    placeholder="AI推理后自动填充，也可手动输入" @keydown.enter="quickCreateTask">
           </div>
@@ -1483,30 +1496,30 @@
               </select>
             </div>
             <div class="form-group">
-              <label>预估时间(分)</label>
+              <label><i class="label-icon">⏱️</i>预估时间(分)</label>
               <input type="number" v-model.number="newTask.estimated_time" class="input" min="0" placeholder="0">
             </div>
             <div class="form-group">
-              <label>相关人</label>
+              <label><i class="label-icon">👥</i>相关人</label>
               <input type="text" v-model="newTask.people_str" class="input" placeholder="张三, 李四（逗号分隔）">
             </div>
           </div>
           <!-- 右列 -->
           <div>
             <div class="form-group">
-              <label>关联惯例</label>
+              <label><i class="label-icon">🔁</i>关联惯例</label>
               <select v-model="newTask.routine_id" class="select-input">
                 <option :value="null">无</option>
                 <option v-for="r in routines" :key="r.id" :value="r.id">{{ r.name }}</option>
               </select>
             </div>
             <div class="form-group">
-              <label>截止日期 <span class="hint-text">默认一周</span></label>
+              <label><i class="label-icon">📅</i>截止日期 <span class="hint-text">默认一周</span></label>
               <input type="date" v-model="newTask.due_date" class="input">
             </div>
             <!-- 文件夹 -->
             <div class="form-group" v-if="!newTask.reuse_folder_path">
-              <label>📁 文件夹 <span class="hint-text">AI建议</span></label>
+              <label><i class="label-icon">📁</i>文件夹 <span class="hint-text">AI建议</span></label>
               <div style="display:flex;gap:4px;align-items:center">
                 <input type="text" v-model="newTask.folder_name" class="input" placeholder="如 feature-analysis" style="flex:1">
                 <label class="toggle" :title="newTask.create_folder ? '创建文件夹' : '不创建'">
@@ -1517,34 +1530,40 @@
               </div>
             </div>
             <div class="form-group" v-else>
-              <label>📁 使用已有目录</label>
+              <label><i class="label-icon">📂</i>使用已有目录</label>
               <div style="font-size:var(--text-xs);color:var(--success);word-break:break-all;display:flex;align-items:center;gap:4px">
                 ✅ {{ newTask.reuse_folder_path }}
                 <button style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-3)" @click="newTask.reuse_folder_path = ''">× 清除</button>
               </div>
             </div>
-            <!-- 汇报 -->
-            <div class="form-group" style="margin-bottom:0">
-              <label class="detail-checkbox">
-                <input type="checkbox" v-model="newTask.is_report"> 📊 这是汇报
-              </label>
-              <input v-if="newTask.is_report" type="text" v-model="newTask.report_meeting" class="input" style="margin-top:4px"
+            <!-- 汇报会议名（仅在选了「汇报」标签时显示） -->
+            <div class="form-group" style="margin-bottom:0" v-if="isReportTagSelected">
+              <label><i class="label-icon">🗣️</i>汇报会议</label>
+              <input type="text" v-model="newTask.report_meeting" class="input"
                      placeholder="汇报会议名称" list="report-meeting-list-q">
             </div>
           </div>
-          <!-- 子任务（AI推理后展示，全宽） -->
-          <div class="form-group" style="grid-column:1/-1" v-if="newTask.subtasks && newTask.subtasks.length">
-            <label>子任务 (AI 建议)</label>
-            <div style="display:flex;flex-wrap:wrap;gap:4px">
-              <span class="ai-subtask-tag" v-for="(st, si) in newTask.subtasks" :key="si">
-                {{ st }}
-                <button class="btn-icon btn-xs" style="color:var(--text-3);margin-left:2px" @click="newTask.subtasks.splice(si, 1)" title="移除">×</button>
-              </span>
+          <!-- 子任务列表（全宽，可拖拽排序、增删改） -->
+          <div class="form-group subtasks-group" style="grid-column:1/-1">
+            <label><i class="label-icon">☑️</i>子任务 <span class="hint-text">拖动 ⠿ 排序，回车新增</span></label>
+            <div class="subtask-list">
+              <div class="subtask-row" v-for="(st, si) in newTask.subtasks" :key="si"
+                   draggable="true"
+                   @dragstart="onSubtaskDragStart(si)"
+                   @dragover.prevent="onSubtaskDragOver(si)"
+                   @drop="onSubtaskDrop(si)"
+                   @dragend="onSubtaskDragEnd">
+                <span class="subtask-handle" title="拖动排序">⠿</span>
+                <input type="text" v-model="newTask.subtasks[si]" class="input subtask-input"
+                       placeholder="子任务内容" @keydown.enter.prevent="addSubtaskAt(si)">
+                <button class="btn-icon btn-xs subtask-del" @click="newTask.subtasks.splice(si, 1)" title="删除">×</button>
+              </div>
+              <button type="button" class="btn btn-xs subtask-add-btn" @click="newTask.subtasks.push('')">＋ 添加子任务</button>
             </div>
           </div>
           <!-- 标签（全宽） -->
           <div class="form-group" style="grid-column:1/-1;margin-bottom:0">
-            <label>标签</label>
+            <label><i class="label-icon">🏷️</i>标签</label>
             <div class="tag-select">
               <span class="tag-pill selectable" v-for="tag in tags" :key="tag.id"
                     :class="{ selected: newTask.tag_ids && newTask.tag_ids.includes(tag.id) }"
@@ -1720,6 +1739,7 @@
         <div class="ai-msg" v-for="(msg, i) in aiMessages" :key="i" :class="msg.role">
           <div class="ai-msg-avatar">{{ msg.role === 'user' ? '👤' : '🤖' }}</div>
           <div class="ai-msg-content">
+            <button class="ai-copy-btn" v-if="msg.role === 'assistant'" @click="copyAIMessage(msg.content, $event)" title="复制">📋</button>
             <div v-html="renderMarkdown(msg.content)"></div>
           </div>
         </div>
@@ -1746,11 +1766,25 @@
         </div>
       </div>
     </div>
+
+    <!-- ========== 全局 AI 推理进度条（弹窗内 AI 推理走 inline，不显示此 overlay） ========== -->
+    <div class="ai-progress-overlay" v-if="aiProgress.active && !aiInferringQuickAdd">
+      <div class="ai-progress-card">
+        <div class="ai-progress-header">
+          <span class="ai-progress-icon">🤖</span>
+          <span class="ai-progress-title">{{ aiProgress.text }}</span>
+          <span class="ai-progress-percent">{{ Math.round(aiProgress.percent) }}%</span>
+        </div>
+        <div class="ai-progress-bar">
+          <div class="ai-progress-fill" :style="{ width: aiProgress.percent + '%' }"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
-  <script src="/js/app.js?v=65"></script>
+  <script src="/js/app.js?v=75"></script>
 </body>
 </html>

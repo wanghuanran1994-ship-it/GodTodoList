@@ -763,19 +763,24 @@ app.post('/api/ai/enrich', (req, res) => {
   const goalList = allGoals.map(g => g.name).join('、') || '无';
   const tagList = allTags.map(t => t.name).join('、') || '无';
 
+  const today = new Date().toISOString().slice(0, 10);
   const prompt = `你是一个项目管理助手。请根据用户输入，给出以下建议（JSON格式）：
 用户输入（任务描述）：${input}
+今天的日期：${today}
 可选目标：${goalList}
 可选标签：${tagList}
 
 首先，从用户输入中提取一个简洁的任务标题（10字以内）。
+然后识别用户提到的截止时间（如"明天"、"下周一"、"3天后"、"月底"等自然语言），换算成具体日期（YYYY-MM-DD 格式）。如果没有明确截止时间则留空。
+然后从可选标签中选出所有相关的标签（必须从可选标签里选，名字完全一致）。注意：「今日必做」表示当天要做的任务（描述中包含"今天"、"马上"、"立即"等急迫语义时选）；「汇报」表示这是要向上级或会议汇报的内容。如果没有任何匹配的标签，返回空数组。
 然后严格返回以下JSON格式（不要其他内容）：
 {
   "title": "简洁的任务标题（10字以内）",
   "description": "任务描述（1-2句话）",
   "estimated_time": 预估分钟数（整数）,
+  "due_date": "YYYY-MM-DD 或留空",
   "goal": "最匹配的目标名称（从可选目标中选，不确定则留空）",
-  "tags": ["匹配的标签名1"],
+  "tags": ["匹配的标签名，可多个，名字必须与可选标签完全一致"],
   "subtasks": ["子任务1", "子任务2", "子任务3"],
   "folder_name": "简短的英文/拼音文件夹名（如 feature-analysis, api-refactor，10字符以内）"
 }`;
@@ -837,6 +842,16 @@ app.post('/api/ai/enrich', (req, res) => {
             ? parsed.subtasks.filter(s => typeof s === 'string' && s.trim()).slice(0, 10)
             : [],
         };
+        // due_date 校验：必须是 YYYY-MM-DD 格式的合法日期
+        if (parsed.due_date && typeof parsed.due_date === 'string') {
+          const m = parsed.due_date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          if (m) {
+            const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+            if (!isNaN(d.getTime()) && d.getFullYear() === Number(m[1]) && d.getMonth() === Number(m[2]) - 1 && d.getDate() === Number(m[3])) {
+              result.due_date = parsed.due_date;
+            }
+          }
+        }
         if (parsed.goal && typeof parsed.goal === 'string') {
           const g = allGoals.find(g => g.name === parsed.goal);
           if (g) result.goal_id = g.id;

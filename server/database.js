@@ -250,6 +250,33 @@ function seedDefaults() {
     }
   }
 
+  // 系统标签迁移：确保「今日必做」「汇报」两个特殊标签存在
+  // 这两个标签在任务创建/更新时与 is_today/is_report 字段双向同步
+  const sysTags = [
+    { name: '今日必做', dimension: 'system', color: '#ef4444', icon: '🔥', sort_order: 0 },
+    { name: '汇报', dimension: 'system', color: '#7c3aed', icon: '📊', sort_order: 1 },
+  ];
+  for (const st of sysTags) {
+    const existing = queryOne('SELECT id FROM tags WHERE name = ? AND dimension = ?', [st.name, 'system']);
+    if (!existing) {
+      db.run('INSERT INTO tags (name, dimension, color, icon, sort_order) VALUES (?, ?, ?, ?, ?)',
+        [st.name, st.dimension, st.color, st.icon, st.sort_order]);
+    }
+  }
+
+  // 数据回填（幂等）：把字段值不为 0 的老任务关联到对应系统标签
+  // 避免后续编辑标签时触发 syncTaskFlagsFromTags 误清字段
+  const todayTagRow = queryOne("SELECT id FROM tags WHERE dimension = 'system' AND name = '今日必做'");
+  const reportTagRow = queryOne("SELECT id FROM tags WHERE dimension = 'system' AND name = '汇报'");
+  if (todayTagRow) {
+    db.run(`INSERT OR IGNORE INTO task_tags (task_id, tag_id)
+            SELECT id, ? FROM tasks WHERE is_today = 1`, [todayTagRow.id]);
+  }
+  if (reportTagRow) {
+    db.run(`INSERT OR IGNORE INTO task_tags (task_id, tag_id)
+            SELECT id, ? FROM tasks WHERE is_report = 1`, [reportTagRow.id]);
+  }
+
   // 默认设置
   const defaults = {
     root_dir: path.join(os.homedir(), 'Work', 'Tasks'),
@@ -655,6 +682,8 @@ function createTask(d) {
     for (const tagId of d.tag_ids) {
       db.run('INSERT OR IGNORE INTO task_tags (task_id, tag_id) VALUES (?, ?)', [id, tagId]);
     }
+    // 同步 is_today / is_report 字段
+    syncTaskFlagsFromTags(id, d.tag_ids);
   }
 
   // 人员（同时自动加入联系人表）
@@ -737,9 +766,13 @@ function updateTag(id, d) {
 }
 
 function deleteTag(id) {
+  // 系统标签不可删除（dimension='system'，与 is_today/is_report 同步逻辑绑定）
+  const t = queryOne('SELECT dimension FROM tags WHERE id = ?', [id]);
+  if (t && t.dimension === 'system') return false;
   db.run('DELETE FROM task_tags WHERE tag_id = ?', [id]);
   db.run('DELETE FROM tags WHERE id = ?', [id]);
   save();
+  return true;
 }
 
 function setTaskTags(taskId, tagIds) {
@@ -747,7 +780,22 @@ function setTaskTags(taskId, tagIds) {
   for (const tagId of tagIds) {
     db.run('INSERT OR IGNORE INTO task_tags (task_id, tag_id) VALUES (?, ?)', [taskId, tagId]);
   }
+  // 同步 is_today / is_report 字段（与系统标签双向绑定）
+  syncTaskFlagsFromTags(taskId, tagIds);
   save();
+}
+
+// 根据任务的标签，同步 is_today / is_report 字段
+// 「今日必做」「汇报」是 dimension='system' 的特殊标签，与其他标签一样的存储方式，
+// 但额外触发这两个 boolean 字段的同步，保留 toggleToday/汇报分组等现有功能
+function syncTaskFlagsFromTags(taskId, tagIds) {
+  const sysTags = queryAll("SELECT id, name FROM tags WHERE dimension = 'system'");
+  const todayTag = sysTags.find(t => t.name === '今日必做');
+  const reportTag = sysTags.find(t => t.name === '汇报');
+  const hasToday = todayTag && Array.isArray(tagIds) && tagIds.includes(todayTag.id);
+  const hasReport = reportTag && Array.isArray(tagIds) && tagIds.includes(reportTag.id);
+  db.run('UPDATE tasks SET is_today = ?, is_report = ?, updated_at = ? WHERE id = ?',
+    [hasToday ? 1 : 0, hasReport ? 1 : 0, now(), taskId]);
 }
 
 // ==================== People ====================
@@ -941,7 +989,17 @@ function getActiveTimers() {
 function toggleToday(taskId) {
   const task = queryOne('SELECT is_today FROM tasks WHERE id = ?', [taskId]);
   if (!task) return;
-  db.run('UPDATE tasks SET is_today = ?, updated_at = ? WHERE id = ?', [task.is_today ? 0 : 1, now(), taskId]);
+  const newVal = task.is_today ? 0 : 1;
+  db.run('UPDATE tasks SET is_today = ?, updated_at = ? WHERE id = ?', [newVal, now(), taskId]);
+  // 反向同步「今日必做」系统标签（让 UI 标签选择器和 🔥 标识始终一致）
+  const todayTag = queryOne("SELECT id FROM tags WHERE dimension = 'system' AND name = '今日必做'");
+  if (todayTag) {
+    if (newVal) {
+      db.run('INSERT OR IGNORE INTO task_tags (task_id, tag_id) VALUES (?, ?)', [taskId, todayTag.id]);
+    } else {
+      db.run('DELETE FROM task_tags WHERE task_id = ? AND tag_id = ?', [taskId, todayTag.id]);
+    }
+  }
   save();
 }
 
@@ -1006,6 +1064,17 @@ function getAIContext() {
   for (const r of routines) {
     context += `- **${r.name}** (${r.frequency})${r.goal_id ? ' → 目标' : ''}\n`;
   }
+
+  context += `\n\n## 输出规范（必须遵守）\n`;
+  context += `- 使用 **Markdown 结构化输出**，不要输出大段裸文本\n`;
+  context += `- 标题层级：用 \`##\` / \`###\` 划分章节，避免用 \`#\`（一级标题太大）\n`;
+  context += `- 列表：并列要点用 \`-\` 无序列表；步骤/优先级用 \`1.\` 有序列表\n`;
+  context += `- 对比/分类信息用 **表格**（\`| ... | ... |\`）\n`;
+  context += `- 代码/命令/文件名用 \`反引号\` 包裹，多行代码用 \`\`\` 代码块\n`;
+  context += `- **重点内容加粗**，不要全篇加粗\n`;
+  context += `- 引用他人观点或注意事项用 \`>\` 引用块\n`;
+  context += `- 不要输出思考过程（reasoning），直接给出最终答案\n`;
+  context += `- 回答简洁有结构，避免重复，避免无关客套\n`;
 
   return context;
 }

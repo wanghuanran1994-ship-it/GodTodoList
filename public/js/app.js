@@ -1,4 +1,4 @@
-const { createApp, ref, reactive, computed, watch, onMounted, nextTick } = Vue;
+const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
 
 createApp({
   setup() {
@@ -227,6 +227,7 @@ createApp({
       estimated_time: 0,
       people_str: '', create_folder: true,
       is_report: false, report_meeting: '',
+      is_today: false,
       folder_name: '', reuse_folder_path: '', subtasks: [],
     });
 
@@ -279,14 +280,14 @@ createApp({
       noteItemIconPicker.value = noteItemIconPicker.value === itemId ? null : itemId;
     }
     async function setItemIcon(item, icon) {
-      // 立即更新 UI，避免等 API
+      // 保存原始值，失败时回滚（避免把已有图标错误清成 null）
+      const oldIcon = item.icon;
       item.icon = icon;
       noteItemIconPicker.value = null;
       try {
         await api(`/api/note-items/${item.id}`, { method: 'PUT', body: { icon } });
       } catch (e) {
-        // 失败回滚
-        item.icon = null;
+        item.icon = oldIcon;
       }
     }
     async function clearItemIcon(item) {
@@ -318,6 +319,28 @@ createApp({
     const aiStreaming = ref(false);
     const aiStreamContent = ref('');
     const aiChatMessages = ref(null);
+
+    // 全局 AI 推理进度条（模拟进度，因 API 非流式无法预知真实进度）
+    const aiProgress = reactive({ active: false, percent: 0, text: '' });
+    let aiProgressTimer = null;
+    function startAIProgress(text) {
+      aiProgress.active = true;
+      aiProgress.percent = 0;
+      aiProgress.text = text || 'AI 推理中…';
+      if (aiProgressTimer) clearInterval(aiProgressTimer);
+      // 每 250ms 增长，开始快后慢，封顶 92%（剩余 8% 留给完成）
+      aiProgressTimer = setInterval(() => {
+        const remaining = 92 - aiProgress.percent;
+        const step = Math.max(0.5, remaining * 0.08);
+        aiProgress.percent = Math.min(92, aiProgress.percent + step);
+      }, 250);
+    }
+    function stopAIProgress() {
+      if (aiProgressTimer) { clearInterval(aiProgressTimer); aiProgressTimer = null; }
+      aiProgress.percent = 100;
+      // 600ms 让用户看到 100%，再隐藏
+      setTimeout(() => { aiProgress.active = false; aiProgress.percent = 0; }, 600);
+    }
 
     // 笔记卡片 AI 对话
     const noteChatCardId = ref(null);
@@ -823,6 +846,11 @@ createApp({
     function switchView(view) {
       if (view === 'gantt') view = 'calendar';
       if (currentView.value === 'notes' && view !== 'notes') saveCardSizesFromDOM();
+      // 离开 graph 视图时停止 rAF 循环和容器监听，避免持续渲染浪费 CPU
+      if (currentView.value === 'graph' && view !== 'graph') {
+        if (gAnimId) { cancelAnimationFrame(gAnimId); gAnimId = null; }
+        if (window._graphResizeObserver) { window._graphResizeObserver.disconnect(); window._graphResizeObserver = null; }
+      }
       currentView.value = view;
       if (view !== 'kanban') closeDetail();
       if (view === 'goals') loadGoalStats();
@@ -1924,109 +1952,41 @@ createApp({
 
     const DAY_NAMES = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '日': 7, '天': 7 };
 
-    function parseQuickInput(raw) {
-      let text = raw.trim();
-      if (!text) return null;
+    // 快速输入栏：把整段文本作为描述，打开统一弹窗（用户在弹窗里点 AI 推理提炼属性）
+    function createFromQuickInput() {
+      const desc = quickInputText.value.trim();
+      if (!desc) return;
 
-      const result = { title: '', due_date: '', tag_ids: [], people: [], estimated_time: 0, is_today: false };
-
-      // Extract #tags
-      const tagPattern = /#(\S+)/g;
-      let m;
-      while ((m = tagPattern.exec(text)) !== null) {
-        const name = m[1];
-        const found = tags.value.find(t => t.name.includes(name) || name.includes(t.name));
-        if (found && !result.tag_ids.includes(found.id)) result.tag_ids.push(found.id);
-      }
-      text = text.replace(tagPattern, '').trim();
-
-      // Extract +people
-      const peoplePattern = /[+＋](\S+)/g;
-      while ((m = peoplePattern.exec(text)) !== null) {
-        result.people.push(m[1]);
-      }
-      text = text.replace(peoplePattern, '').trim();
-
-      // Extract !priority (1=30m, 2=1h, 3=4h)
-      const priMatch = text.match(/!([123])/);
-      if (priMatch) {
-        result.estimated_time = [30, 60, 240][Number(priMatch[1]) - 1];
-        text = text.replace(/![123]/, '').trim();
-      }
-
-      // Extract 🔥 or !! for is_today
-      if (/🔥|!!/.test(text)) {
-        result.is_today = true;
-        text = text.replace(/🔥|!!/g, '').trim();
-      }
-
-      // Extract @date
-      const datePattern = /@(今天|明天|后天|周([一二三四五六七天])|(\d{1,2})\/(\d{1,2}))/;
-      const dateMatch = text.match(datePattern);
-      if (dateMatch) {
-        const d = new Date();
-        if (dateMatch[1] === '今天') { /* keep d */ }
-        else if (dateMatch[1] === '明天') d.setDate(d.getDate() + 1);
-        else if (dateMatch[1] === '后天') d.setDate(d.getDate() + 2);
-        else if (dateMatch[2]) {
-          const target = DAY_NAMES[dateMatch[2]];
-          const current = d.getDay() || 7;
-          let diff = target - current;
-          if (diff <= 0) diff += 7;
-          d.setDate(d.getDate() + diff);
-        } else if (dateMatch[3] && dateMatch[4]) {
-          d.setMonth(Number(dateMatch[3]) - 1, Number(dateMatch[4]));
-        }
-        result.due_date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-        text = text.replace(datePattern, '').trim();
-      }
-
-      result.title = text.replace(/\s+/g, ' ').trim();
-      return result;
-    }
-
-    const quickInputParsed = computed(() => {
-      if (!quickInputText.value.trim()) return null;
-      return parseQuickInput(quickInputText.value);
-    });
-
-    async function createFromQuickInput() {
-      const parsed = parseQuickInput(quickInputText.value);
-      if (!parsed || !parsed.title) return;
-
-      // Context defaults
-      const goal_id = filterGoalId.value || null;
-      const tag_ids = [...new Set([...parsed.tag_ids, ...filterTagIds.value])];
-
-      const id = await api('/api/tasks', {
-        method: 'POST',
-        body: {
-          title: parsed.title,
-          description: '',
-          goal_id,
-          routine_id: null,
-          tag_ids,
-          due_date: parsed.due_date || null,
-          estimated_time: parsed.estimated_time,
-          people: parsed.people,
-          is_today: parsed.is_today ? 1 : 0,
-          create_folder: false,  // 延迟创建，等 AI 建议确认后再创建
-        }
+      Object.assign(newTask, {
+        title: '',
+        description: desc,
+        goal_id: filterGoalId.value || null,
+        routine_id: null,
+        tag_ids: [...filterTagIds.value],
+        due_date: '',
+        estimated_time: 0,
+        people_str: '',
+        create_folder: true,
+        is_report: false,
+        report_meeting: '',
+        is_today: false,
+        folder_name: '',
+        reuse_folder_path: '',
+        subtasks: [],
       });
 
       quickInputText.value = '';
-      await loadTasks();
-      selectTask(id.id);
-
-      // AI enrich async
-      fetchAISuggestions(id.id, parsed.title);
-      // 自动触发 AI 分析
-      analyzeTaskProgress(id.id);
+      showQuickAdd.value = true;
+      // 自动触发 AI 推理：用户从输入栏敲完「创建」就开跑，不用再点按钮
+      nextTick(() => {
+        aiInferQuickAdd();
+      });
     }
 
     async function fetchAISuggestions(taskId, title) {
       aiEnriching.value = true;
       aiSuggestions.value = null;
+      startAIProgress('正在推理任务属性…');
       try {
         const result = await api('/api/ai/enrich', {
           method: 'POST',
@@ -2039,7 +1999,17 @@ createApp({
       } catch (e) {
         // Silent fail - AI enrich is optional
       }
+      stopAIProgress();
       aiEnriching.value = false;
+    }
+
+    // AI 推理阶段文案（让 inline 进度条不只是一根光秃秃的条）
+    function aiInferInlineStatus(percent) {
+      if (percent < 25) return '正在理解描述…';
+      if (percent < 55) return '提炼标题与属性…';
+      if (percent < 85) return '匹配目标与标签…';
+      if (percent < 100) return '生成子任务与目录…';
+      return '完成 ✓';
     }
 
     // AI 推理：从描述自动填充新建任务属性
@@ -2047,6 +2017,7 @@ createApp({
       const desc = newTask.description || newTask.title;
       if (!desc) return;
       aiInferringQuickAdd.value = true;
+      startAIProgress('正在分析描述，推理任务属性…');
       try {
         const result = await api('/api/ai/enrich', {
           method: 'POST',
@@ -2055,17 +2026,12 @@ createApp({
         if (result && Object.keys(result).length > 0) {
           if (result.title && !newTask.title) newTask.title = result.title;
           if (result.estimated_time && !newTask.estimated_time) newTask.estimated_time = result.estimated_time;
-          if (result.goal) {
-            const g = goals.value.find(g => g.name === result.goal);
-            if (g && !newTask.goal_id) newTask.goal_id = g.id;
-          }
-          if (result.tags && result.tags.length) {
+          if (result.due_date && !newTask.due_date) newTask.due_date = result.due_date;
+          if (result.goal_id && !newTask.goal_id) newTask.goal_id = result.goal_id;
+          if (result.tag_ids && result.tag_ids.length) {
             if (!newTask.tag_ids) newTask.tag_ids = [];
-            for (const tagName of result.tags) {
-              const t = tags.value.find(t => t.name === tagName);
-              if (t && !newTask.tag_ids.includes(t.id)) {
-                newTask.tag_ids.push(t.id);
-              }
+            for (const tid of result.tag_ids) {
+              if (!newTask.tag_ids.includes(tid)) newTask.tag_ids.push(tid);
             }
           }
           if (result.subtasks && result.subtasks.length) {
@@ -2077,6 +2043,7 @@ createApp({
           }
         }
       } catch (e) { /* silent - AI inference is optional */ }
+      stopAIProgress();
       aiInferringQuickAdd.value = false;
     }
 
@@ -2272,13 +2239,20 @@ createApp({
       Object.assign(newTask, {
         title: '', description: '', goal_id: filterGoalId.value || null,
         routine_id: null, tag_ids: [...filterTagIds.value], due_date: '', estimated_time: 0,
-        people_str: '', create_folder: true, is_report: false, report_meeting: ''
+        people_str: '', create_folder: true, is_report: false, report_meeting: '',
+        is_today: false, folder_name: '', reuse_folder_path: '', subtasks: [],
       });
       showQuickAdd.value = true;
       nextTick(() => {
         const el = document.querySelector('.quick-add-modal .input-lg');
         if (el) el.focus();
       });
+    }
+
+    // 新建汇报任务：先重置，再标记 is_report
+    function openQuickAddReport() {
+      openQuickAdd();
+      newTask.is_report = true;
     }
 
     async function quickCreateTask() {
@@ -2305,6 +2279,7 @@ createApp({
           folder_name: newTask.folder_name || null,
           is_report: newTask.is_report ? 1 : 0,
           report_meeting: newTask.report_meeting,
+          is_today: newTask.is_today ? 1 : 0,
         }
       });
 
@@ -2333,13 +2308,11 @@ createApp({
         tag_ids: [], due_date: new Date(Date.now() + 7*86400000).toISOString().slice(0, 10),
         estimated_time: 0,
         people_str: '', create_folder: true,
-        is_report: false, report_meeting: '',
+        is_report: false, report_meeting: '', is_today: false,
         folder_name: '', reuse_folder_path: '', subtasks: [],
       });
       await loadTasks();
       selectTask(id.id);
-      // 自动触发 AI 分析
-      analyzeTaskProgress(id.id);
     }
 
     function toggleNewTaskTag(tagId) {
@@ -2347,6 +2320,45 @@ createApp({
       if (idx >= 0) newTask.tag_ids.splice(idx, 1);
       else newTask.tag_ids.push(tagId);
     }
+
+    // ========== 子任务列表：拖拽排序 ==========
+    let subtaskDragIdx = null;
+    function onSubtaskDragStart(idx) { subtaskDragIdx = idx; }
+    function onSubtaskDragOver(idx) {
+      if (subtaskDragIdx === null || subtaskDragIdx === idx) return;
+      // 实时交换让拖拽视觉跟手
+      const arr = newTask.subtasks;
+      const [moved] = arr.splice(subtaskDragIdx, 1);
+      arr.splice(idx, 0, moved);
+      subtaskDragIdx = idx;
+    }
+    function onSubtaskDrop() { subtaskDragIdx = null; }
+    function onSubtaskDragEnd() { subtaskDragIdx = null; }
+    function addSubtaskAt(idx) {
+      // 回车新增：在当前行下面插入一个空行并聚焦
+      newTask.subtasks.splice(idx + 1, 0, '');
+      nextTick(() => {
+        const inputs = document.querySelectorAll('.subtask-input');
+        if (inputs[idx + 1]) inputs[idx + 1].focus();
+      });
+    }
+
+    // 系统标签：「汇报」「今日必做」dimension='system'
+    // 这两个标签与其他标签完全一样（存在 task_tags），只是会触发 is_report/is_today 字段同步
+    // 这个 computed 用于在弹窗里判断是否选了「汇报」标签，决定要不要显示「汇报会议」输入框
+    const isReportTagSelected = computed(() => {
+      const t = tags.value.find(x => x.dimension === 'system' && x.name === '汇报');
+      return !!(t && newTask.tag_ids.includes(t.id));
+    });
+    // 详情页：当前任务是否选了「汇报」标签
+    const isReportTask = computed(() => {
+      const t = tags.value.find(x => x.dimension === 'system' && x.name === '汇报');
+      return !!(t && selectedTask.value?.tags?.some(x => x.id === t.id));
+    });
+
+    // 详情弹窗：当前激活的标签页（basic/assoc/exec/subtask/asset）
+    const activeDetailTab = ref('basic');
+    function switchDetailTab(name) { activeDetailTab.value = name; }
 
     let selectTaskRequestId = 0;
     async function selectTask(id) {
@@ -2357,6 +2369,7 @@ createApp({
         // 确保没有更新的请求覆盖
         if (reqId !== selectTaskRequestId) return;
         selectedTask.value = task;
+        activeDetailTab.value = 'basic';   // 每次打开默认「基本」tab
         loadTaskConversations(id);
         checkAllPathReadmes();
       } catch (e) {
@@ -3198,14 +3211,19 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
 
     async function createTaskFromRoutine(routine) {
       Object.assign(newTask, {
-        title: routine.name, description: routine.description,
-        goal_id: routine.goal_id, routine_id: routine.id,
-        tag_ids: [], due_date: '', estimated_time: 0,
+        title: routine.name, description: routine.description || '',
+        goal_id: routine.goal_id || null, routine_id: routine.id,
+        tag_ids: [], due_date: '', estimated_time: routine.estimated_time || 0,
         people_str: '', create_folder: false,
         is_report: !!routine.is_report,
         report_meeting: routine.report_meeting || '',
+        is_today: false, folder_name: '', reuse_folder_path: '', subtasks: [],
       });
       showQuickAdd.value = true;
+      nextTick(() => {
+        const el = document.querySelector('.quick-add-modal .input-lg');
+        if (el) el.focus();
+      });
     }
 
     async function loadReview() {
@@ -3285,13 +3303,16 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       });
     }
 
+    let aiConfigSavedTimer = null;
     async function saveAIConfigs() {
       await api('/api/settings', {
         method: 'PUT',
         body: { ai_configs: aiConfigs.value, ai_active_config: activeAIConfig.value }
       });
       aiConfigSaved.value = true;
-      setTimeout(() => { aiConfigSaved.value = false; }, 2000);
+      // 用 ref 跟踪 timer，连续保存时清掉旧 timer，避免遗留回调把新状态错误重置
+      if (aiConfigSavedTimer) clearTimeout(aiConfigSavedTimer);
+      aiConfigSavedTimer = setTimeout(() => { aiConfigSaved.value = false; aiConfigSavedTimer = null; }, 2000);
     }
 
     async function testAIConnection() {
@@ -3324,25 +3345,22 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
               const { done, value } = await reader.read();
               if (done) break;
               buffer += decoder.decode(value, { stream: true });
-
-              const events = buffer.split('\n\n');
-              buffer = events.pop();
-
-              for (const event of events) {
-                for (const line of event.split('\n')) {
-                  const tl = line.trim();
-                  if (!tl.startsWith('data:')) continue;
-                  const raw = tl.substring(tl.indexOf(':') + 1).trim();
-                  if (!raw || raw === '[DONE]') continue;
-                  try {
-                    const d = JSON.parse(raw);
-                    const c = d.choices?.[0]?.delta?.content
-                           || d.choices?.[0]?.delta?.reasoning_content
-                           || d.choices?.[0]?.message?.content
-                           || d.content || d.text || d.delta?.text;
-                    if (c) gotContent = true;
-                  } catch (e) { /* skip */ }
-                }
+              // 按 \n 切（兼容 \r\n），最后一段可能是不完整行，留到下次
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+              for (const line of lines) {
+                const tl = line.trim();
+                if (!tl.startsWith('data:')) continue;
+                const raw = tl.substring(tl.indexOf(':') + 1).trim();
+                if (!raw || raw === '[DONE]') continue;
+                try {
+                  const d = JSON.parse(raw);
+                  const c = d.choices?.[0]?.delta?.content
+                         || d.choices?.[0]?.delta?.reasoning_content
+                         || d.choices?.[0]?.message?.content
+                         || d.content || d.text || d.delta?.text;
+                  if (c) gotContent = true;
+                } catch (e) { /* skip */ }
               }
               if (gotContent) {
                 aiTestResult.value = '✅ 连接成功，模型正常响应';
@@ -3693,6 +3711,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       aiInput.value = '';
       aiStreaming.value = true;
       aiStreamContent.value = '';
+      startAIProgress('正在思考…');
 
       await nextTick();
       scrollAIChat();
@@ -3709,6 +3728,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
           try { const err = await res.json(); errMsg = err.error || errMsg; } catch (e) {}
           aiMessages.value.push({ role: 'assistant', content: '❌ ' + errMsg + '\n\n请前往 **设置 → AI 军师配置** 填写 API 地址、模型名和 API Key。' });
           aiStreaming.value = false;
+          stopAIProgress();
           return;
         }
 
@@ -3717,6 +3737,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         let fullContent = '';
         // SSE buffer：TCP 包可能把一行 data: 拆到多个 chunk，必须跨 chunk 拼接
         let sseBuffer = '';
+        let firstChunkReceived = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -3737,6 +3758,8 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
               const d = json.choices?.[0]?.delta;
               const delta = (d?.content || '');
               if (delta) {
+                // 第一个 chunk 到达后停进度条，让用户专注流式输出
+                if (!firstChunkReceived) { firstChunkReceived = true; stopAIProgress(); }
                 fullContent += delta;
                 aiStreamContent.value = fullContent;
                 await nextTick();
@@ -3773,6 +3796,8 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         aiMessages.value.push({ role: 'assistant', content: msg });
       }
 
+      // 兜底：如果流式从未开始（错误/空响应），停掉进度条
+      stopAIProgress();
       aiStreaming.value = false;
       aiStreamContent.value = '';
       await nextTick();
@@ -3813,6 +3838,31 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       } catch (e) {}
       // fallback: 基本 HTML 转义 + 换行
       return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+    }
+
+    // 复制 AI 消息内容到剪贴板，1.5s 视觉反馈
+    async function copyAIMessage(text, ev) {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (e) {
+        // 降级：用临时 textarea 兜底（部分浏览器在非 HTTPS / 非聚焦时 clipboard API 不可用）
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        } catch (_) { return; }
+      }
+      if (!ev || !ev.currentTarget) return;
+      const btn = ev.currentTarget;
+      const orig = btn.textContent;
+      btn.textContent = '✓';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
     }
 
     // ==================== 计时器 ====================
@@ -3927,7 +3977,32 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         darkMode.value = true;
         document.body.classList.add('dark');
       }
-      window.addEventListener('resize', () => { if (currentView.value === 'graph') resizeGraph(); });
+      window.addEventListener('resize', onWindowResize);
+      // Vue 接管完成，淡出加载过渡层（不等 loadAll，让用户尽早看到骨架）
+      const loader = document.getElementById('app-loader');
+      if (loader) {
+        requestAnimationFrame(() => {
+          loader.classList.add('hide');
+          setTimeout(() => loader.remove(), 500);
+        });
+      }
+    });
+
+    // 具名 resize handler，方便 onUnmounted 时移除
+    function onWindowResize() {
+      if (currentView.value === 'graph') resizeGraph();
+    }
+
+    // 单页应用理论上不卸载，但显式 cleanup 防御未来热重载/组件化场景
+    onUnmounted(() => {
+      if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+      if (gAnimId) { cancelAnimationFrame(gAnimId); gAnimId = null; }
+      if (window._graphResizeObserver) { window._graphResizeObserver.disconnect(); window._graphResizeObserver = null; }
+      if (cardResizeObserver) { cardResizeObserver.disconnect(); cardResizeObserver = null; }
+      if (aiConfigSavedTimer) { clearTimeout(aiConfigSavedTimer); aiConfigSavedTimer = null; }
+      if (aiProgressTimer) { clearInterval(aiProgressTimer); aiProgressTimer = null; }
+      window.removeEventListener('resize', onWindowResize);
+      window.removeEventListener('beforeunload', saveCardSizesFromDOM);
     });
 
     // ==================== 今日必做 ====================
@@ -3940,6 +4015,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
 
     async function analyzeTaskProgress(taskId) {
       analyzingTaskId.value = taskId;
+      startAIProgress('正在分析任务进展…');
       try {
         const result = await api(`/api/tasks/${taskId}/analyze-progress`, { method: 'POST' });
         expandedProgress.value[taskId] = true;
@@ -3950,6 +4026,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       } catch (e) {
         // auto-triggered, fail silently
       }
+      stopAIProgress();
       analyzingTaskId.value = null;
     }
 
@@ -4189,10 +4266,11 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       goalStats,
       reviewType, reviewData,
       autoCreateFolder, statuses,
-      showAIChat, aiMessages, aiInput, aiStreaming, aiStreamContent, aiChatMessages,
+      showAIChat, aiMessages, aiInput, aiStreaming, aiStreamContent, aiChatMessages, aiProgress,
       filteredTasks,
       switchView, goToTask, toggleGoalFilter, toggleTagFilter, debounceSearch,
-      openQuickAdd, quickCreateTask, toggleNewTaskTag,
+      openQuickAdd, openQuickAddReport, quickCreateTask, toggleNewTaskTag, isReportTagSelected, isReportTask, activeDetailTab, switchDetailTab,
+      onSubtaskDragStart, onSubtaskDragOver, onSubtaskDrop, onSubtaskDragEnd, addSubtaskAt,
       selectTask, closeDetail, saveSelectedTask, changeStatus, deleteSelectedTask,
       isTaskTagged, toggleTaskTag, addTag, removeTag, updateTag,
       addPerson, removePerson,
@@ -4225,7 +4303,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       expandedProgress, dragPathIndex, dragPathOverIndex,
       openDirBrowser,
       launchTerminal,
-      clearAIChat, closeAIChat, sendAIMessage, sendAIPrompt, renderMarkdown,
+      clearAIChat, closeAIChat, sendAIMessage, sendAIPrompt, renderMarkdown, copyAIMessage,
       noteChatCardId, noteConversations, openNoteChat,
       // Timer
       activeTimers, startTaskTimer, stopTaskTimer, isTimerActive, getTimerElapsed, formatTime, formatDuration,
@@ -4265,10 +4343,10 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       graphZoom, graphZoomTo, graphZoomIn, graphZoomOut,
       calendarPrevMonth, calendarNextMonth, calendarPrevWeek, calendarNextWeek,
       // Quick input
-      quickInputText, quickInputParsed, createFromQuickInput,
+      quickInputText, createFromQuickInput,
       // AI suggestions
       aiSuggestions, aiEnriching, aiPickFolder, applyAISuggestions, dismissAISuggestions,
-      aiInferringQuickAdd, aiInferQuickAdd, quickAddPickFolder, createFolderWithName,
+      aiInferringQuickAdd, aiInferQuickAdd, aiInferInlineStatus, quickAddPickFolder, createFolderWithName,
       // Goal target date
       saveGoalTargetDate,
       // Task files
