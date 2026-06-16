@@ -2356,6 +2356,13 @@ createApp({
       return !!(t && selectedTask.value?.tags?.some(x => x.id === t.id));
     });
 
+    // id → tag 映射，避免模板里对同一 id 反复 find（4 次以上）
+    const tagMap = computed(() => {
+      const m = new Map();
+      for (const t of tags.value) m.set(t.id, t);
+      return m;
+    });
+
     // 详情弹窗：当前激活的标签页（basic/assoc/exec/subtask/asset）
     const activeDetailTab = ref('basic');
     function switchDetailTab(name) { activeDetailTab.value = name; }
@@ -2399,7 +2406,7 @@ createApp({
           estimated_time: t.estimated_time,
           actual_time: t.actual_time,
           due_date: t.due_date,
-          is_report: t.is_report ? 1 : 0,
+          // is_report / is_today 由系统标签（toggleTaskTag → setTaskTags → syncTaskFlagsFromTags）双向同步，不在此发送
           report_meeting: t.report_meeting || '',
         }
       });
@@ -2533,7 +2540,15 @@ createApp({
           method: 'POST',
           body: formData,
         });
-        if (!res.ok) throw new Error('Upload failed');
+        if (!res.ok) {
+          // 透传服务端错误信息（含平台/具体原因），便于诊断 Windows 中文文件名等问题
+          let detail = `HTTP ${res.status}`;
+          try {
+            const errData = await res.json();
+            if (errData?.error) detail = errData.error;
+          } catch (_) {}
+          throw new Error(detail);
+        }
         await res.json();
 
         // 重新加载任务详情
@@ -2783,7 +2798,8 @@ createApp({
 
       // 先处理 Markdown 表格：把表格块替换成 HTML table 占位
       const tablePlaceholders = [];
-      const lines = text.split('\n');
+      // 统一换行符：Windows 剪贴板常含 \r\n，否则行尾残留 \r 会让 /^\|.+\|$/ 失配
+      const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
       let i = 0;
       let processed = '';
       while (i < lines.length) {
@@ -2816,9 +2832,13 @@ createApp({
         return '\x00URL' + (urlPlaceholders.length - 1) + '\x00';
       });
 
-      // 检测绝对路径（支持中文、引号包围），替换为占位符
+      // 检测绝对路径（支持 Unix /xxx 和 Windows C:\xxx / C:/xxx），替换为占位符
       const pathPlaceholders = [];
-      processed = processed.replace(/["']?(\/[^\s<>"']{2,})["']?/g, (fullMatch, p) => {
+      // 匹配：
+      //   - Unix 绝对路径：/foo/bar
+      //   - Windows 盘符路径：C:\foo\bar 或 C:/foo/bar
+      const pathRe = /["']?((?:[A-Za-z]:[\\/][^\s<>"']{2,})|(?:\/[^\s<>"']{2,}))["']?/g;
+      processed = processed.replace(pathRe, (fullMatch, p) => {
         if (fullMatch.startsWith('](') || fullMatch.startsWith('![')) return fullMatch;
         if (/^\|/.test(p.trim())) return fullMatch;
         const clean = p.replace(/["']/g, '');
@@ -2847,10 +2867,14 @@ createApp({
         html = html.replace('\x00TABLE' + idx + '\x00', tableHtml);
       });
 
+      // HTML 属性完整转义（& " < >）
+      const escAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
       // 还原路径
       pathPlaceholders.forEach((p, idx) => {
+        const esc = escAttr(p);
         html = html.replace('\x00PATH' + idx + '\x00',
-          `<span class="nc-path" data-path="${p.replace(/"/g, '&quot;')}" title="点击打开: ${p.replace(/"/g, '&quot;')}">${p}</span>`);
+          `<span class="nc-path" data-path="${esc}" title="点击打开: ${esc}">${esc}</span>`);
       });
 
       return html;
@@ -4269,7 +4293,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       showAIChat, aiMessages, aiInput, aiStreaming, aiStreamContent, aiChatMessages, aiProgress,
       filteredTasks,
       switchView, goToTask, toggleGoalFilter, toggleTagFilter, debounceSearch,
-      openQuickAdd, openQuickAddReport, quickCreateTask, toggleNewTaskTag, isReportTagSelected, isReportTask, activeDetailTab, switchDetailTab,
+      openQuickAdd, openQuickAddReport, quickCreateTask, toggleNewTaskTag, isReportTagSelected, isReportTask, tagMap, activeDetailTab, switchDetailTab,
       onSubtaskDragStart, onSubtaskDragOver, onSubtaskDrop, onSubtaskDragEnd, addSubtaskAt,
       selectTask, closeDetail, saveSelectedTask, changeStatus, deleteSelectedTask,
       isTaskTagged, toggleTaskTag, addTag, removeTag, updateTag,

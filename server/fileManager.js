@@ -1,21 +1,37 @@
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
+const { spawn } = require('child_process');
 const { getSetting } = require('./database');
 
 function getRootDir() {
   return getSetting('root_dir') || path.join(require('os').homedir(), 'Work', 'Tasks');
 }
 
+// Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）+ 扩展形式（如 CON.txt）
+const WIN_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+
 function sanitizeName(name) {
-  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim();
+  let s = String(name || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim();
+  // Windows 不允许文件名/目录名以空格或点结尾（macOS/Linux 允许）
+  s = s.replace(/[\s.]+$/, '');
+  // 保留名加 _ 前缀绕过
+  if (WIN_RESERVED.test(s)) s = '_' + s;
+  if (!s) s = 'unnamed';
+  return s;
+}
+
+// recursive mkdir，吞 EEXIST（跨平台一致行为，避开 existsSync TOCTOU 竞态）
+function ensureDir(p) {
+  try {
+    fs.mkdirSync(p, { recursive: true });
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+  }
 }
 
 function createTaskFolder(taskId, taskTitle, customFolderName) {
   const rootDir = getRootDir();
-  if (!fs.existsSync(rootDir)) {
-    fs.mkdirSync(rootDir, { recursive: true });
-  }
+  ensureDir(rootDir);
 
   const format = getSetting('folder_format') || 'date_name';
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -31,10 +47,7 @@ function createTaskFolder(taskId, taskTitle, customFolderName) {
   }
 
   const folderPath = path.join(rootDir, folderName);
-
-  if (!fs.existsSync(folderPath)) {
-    fs.mkdirSync(folderPath, { recursive: true });
-  }
+  ensureDir(folderPath);
 
   return folderPath;
 }
@@ -80,6 +93,17 @@ function writeTaskReadme(task, goals, routines, tags) {
     updated_at: new Date().toISOString(),
   };
 
+  // YAML 标量引号包裹：路径含 : \ 等字符必须加引号（Windows C:\Users\...）
+  // 否则标准 YAML parser（Obsidian 等）会解析失败
+  const yamlScalar = (s) => {
+    const str = String(s);
+    // 含特殊字符（: # @ ` ' " ! & * ? | > % {}[]，或以特殊符号开头/结尾）需双引号包裹
+    if (/[:#@[`'"!&*?|>%{}[\],]/.test(str) || /^[-?:\s]/.test(str) || /\s$/.test(str) || /^~|^(true|false|null|yes|no|on|off)$/i.test(str)) {
+      return `"${str.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    }
+    return str;
+  };
+
   let fmBlock = '---\n';
   for (const [k, v] of Object.entries(frontmatter)) {
     if (Array.isArray(v)) {
@@ -87,14 +111,14 @@ function writeTaskReadme(task, goals, routines, tags) {
         fmBlock += `${k}: []\n`;
       } else {
         fmBlock += `${k}:\n`;
-        v.forEach(item => { fmBlock += `  - ${item}\n`; });
+        v.forEach(item => { fmBlock += `  - ${yamlScalar(item)}\n`; });
       }
     } else if (v === null) {
       fmBlock += `${k}: \n`;
-    } else if (typeof v === 'boolean') {
+    } else if (typeof v === 'boolean' || typeof v === 'number') {
       fmBlock += `${k}: ${v}\n`;
     } else {
-      fmBlock += `${k}: ${v}\n`;
+      fmBlock += `${k}: ${yamlScalar(v)}\n`;
     }
   }
   fmBlock += '---\n';
@@ -282,7 +306,11 @@ function scanDirectories(rootDir) {
 
   const results = [];
   let entries;
-  try { entries = fs.readdirSync(rootDir, { withFileTypes: true }); } catch (e) { return []; }
+  try {
+    entries = fs.readdirSync(rootDir, { withFileTypes: true });
+  } catch (e) { return []; }
+  // 跨平台排序：macOS HFS+/APFS 默认字母序，NTFS 默认创建序，统一用 numeric compare
+  entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
@@ -325,9 +353,7 @@ function scanDirectories(rootDir) {
 // ==================== 文件操作 ====================
 
 function saveAttachment(taskFolder, file) {
-  if (!fs.existsSync(taskFolder)) {
-    fs.mkdirSync(taskFolder, { recursive: true });
-  }
+  ensureDir(taskFolder);
 
   const safeName = sanitizeName(path.basename(file.originalname || file.name || 'file'));
   const filePath = path.join(taskFolder, safeName);
@@ -341,37 +367,51 @@ function saveAttachment(taskFolder, file) {
     counter++;
   }
 
-  if (file.path && fs.existsSync(file.path)) {
-    fs.copyFileSync(file.path, finalPath);
-    try { fs.unlinkSync(file.path); } catch (e) { /* ignore */ }
-  } else if (file.buffer) {
-    fs.writeFileSync(finalPath, file.buffer);
-  }
+  try {
+    if (file.path && fs.existsSync(file.path)) {
+      fs.copyFileSync(file.path, finalPath);
+      try { fs.unlinkSync(file.path); } catch (e) { /* ignore */ }
+    } else if (file.buffer) {
+      fs.writeFileSync(finalPath, file.buffer);
+    } else {
+      throw new Error('文件缺少 path 或 buffer');
+    }
 
-  return {
-    filePath: finalPath,
-    fileName: path.basename(finalPath),
-    fileType: path.extname(finalPath).toLowerCase(),
-    fileSize: fs.statSync(finalPath).size,
-  };
+    return {
+      filePath: finalPath,
+      fileName: path.basename(finalPath),
+      fileType: path.extname(finalPath).toLowerCase(),
+      fileSize: fs.statSync(finalPath).size,
+    };
+  } catch (e) {
+    // 杀毒软件锁定 / 权限不足 / 路径过长（Windows MAX_PATH）等
+    const err = new Error(`保存附件失败: ${e.message} (code=${e.code || 'unknown'})`);
+    err.cause = e;
+    throw err;
+  }
 }
 
+// 用 spawn 数组传参，杜绝 shell 注入（路径含空格/&/%/^ 不再被解释）
 function openFolder(folderPath) {
   if (!folderPath || !fs.existsSync(folderPath)) return false;
 
   const platform = process.platform;
-  let command;
-  if (platform === 'darwin') {
-    command = `open "${folderPath}"`;
-  } else if (platform === 'win32') {
-    command = `explorer "${folderPath}"`;
-  } else {
-    command = `xdg-open "${folderPath}"`;
+  let child;
+  try {
+    if (platform === 'darwin') {
+      child = spawn('open', [folderPath], { detached: true, stdio: 'ignore' });
+    } else if (platform === 'win32') {
+      // explorer 对末尾反斜杠+引号有 bug，spawn 数组传参绕过
+      // 注意：explorer 在某些情况下会复用现有窗口，加 /n, 参数强制开新窗口
+      child = spawn('explorer', [folderPath], { detached: true, stdio: 'ignore', windowsVerbatimArguments: false });
+    } else {
+      child = spawn('xdg-open', [folderPath], { detached: true, stdio: 'ignore' });
+    }
+    if (child) { child.unref(); }
+  } catch (e) {
+    console.error('打开文件夹失败:', e);
+    return false;
   }
-
-  exec(command, (err) => {
-    if (err) console.error('打开文件夹失败:', err);
-  });
   return true;
 }
 
@@ -379,18 +419,22 @@ function openFile(filePath) {
   if (!filePath || !fs.existsSync(filePath)) return false;
 
   const platform = process.platform;
-  let command;
-  if (platform === 'darwin') {
-    command = `open "${filePath}"`;
-  } else if (platform === 'win32') {
-    command = `start "" "${filePath}"`;
-  } else {
-    command = `xdg-open "${filePath}"`;
+  let child;
+  try {
+    if (platform === 'darwin') {
+      child = spawn('open', [filePath], { detached: true, stdio: 'ignore' });
+    } else if (platform === 'win32') {
+      // Windows 用 cmd /c start "" "<path>" 让系统默认程序打开
+      // start 第一个 "" 是窗口标题占位（避免路径被当标题）
+      child = spawn('cmd', ['/c', 'start', '', filePath], { detached: true, stdio: 'ignore', windowsVerbatimArguments: false });
+    } else {
+      child = spawn('xdg-open', [filePath], { detached: true, stdio: 'ignore' });
+    }
+    if (child) { child.unref(); }
+  } catch (e) {
+    console.error('打开文件失败:', e);
+    return false;
   }
-
-  exec(command, (err) => {
-    if (err) console.error('打开文件失败:', err);
-  });
   return true;
 }
 

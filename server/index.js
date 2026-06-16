@@ -14,25 +14,114 @@ const PORT = 3000;
 
 let dbReady = false;
 
+// ==================== 跨平台辅助（Windows 兼容） ====================
+
+const isWin = process.platform === 'win32';
+const isMac = process.platform === 'darwin';
+
+/**
+ * 统一的 spawn 包装：参数走数组，绝不手动加引号。
+ * - Windows 默认 detached + stdio:'ignore'，调用方按需覆盖
+ * - 返回 Promise，捕获 spawn 异常并包含 stderr 用于排查
+ */
+function spawnSafe(command, args, opts = {}) {
+  return new Promise((resolve) => {
+    const defaults = isWin
+      ? { detached: true, stdio: 'ignore', windowsHide: false, windowsVerbatimArguments: false }
+      : { detached: true, stdio: 'ignore' };
+    const finalOpts = { ...defaults, ...opts };
+    let child;
+    try {
+      child = spawn(command, args, finalOpts);
+    } catch (e) {
+      return resolve({ ok: false, error: `spawn 失败: ${e.message}` });
+    }
+    if (!child) return resolve({ ok: false, error: 'spawn 返回空' });
+    let stderr = '';
+    if (child.stderr) {
+      child.stderr.on('data', (d) => { stderr += d.toString(); });
+    }
+    child.on('error', (e) => resolve({ ok: false, error: e.message }));
+    child.on('spawn', () => {
+      try { child.unref(); } catch (_) {}
+      resolve({ ok: true });
+    });
+    // 兜底：4s 内未触发 spawn 事件视为失败
+    setTimeout(() => {
+      if (!child.killed && child.exitCode === null && child.pid) {
+        resolve({ ok: true });
+      }
+    }, 4000);
+  });
+}
+
+/**
+ * 探测 PowerShell：优先 pwsh.exe（PowerShell 7+），fallback powershell.exe（5.1）。
+ * Windows Server Core / 精简版可能两者都没有，返回 null。
+ */
+let _cachedShell = undefined;
+function findPowerShell() {
+  if (_cachedShell !== undefined) return _cachedShell;
+  if (!isWin) { _cachedShell = null; return null; }
+  // 注意：where 命令同步但极快（<50ms），仅启动期调用一次可接受
+  for (const c of ['pwsh.exe', 'powershell.exe']) {
+    try {
+      execSync(`where ${c}`, { stdio: 'ignore', windowsHide: true });
+      _cachedShell = c;
+      return c;
+    } catch (_) {}
+  }
+  _cachedShell = null;
+  return null;
+}
+
+/**
+ * 编码 PowerShell 脚本为 -EncodedCommand 参数（UTF-16LE Base64）。
+ * 避免 -Command 字符串经 cmd/shell 转义时中文乱码 + 引号嵌套问题。
+ */
+function encodePSScript(script) {
+  return Buffer.from(script, 'utf16le').toString('base64');
+}
+
+/**
+ * 统一错误响应：包含平台 + 错误信息，前端可显示。
+ */
+function sendPlatformError(res, action, err) {
+  console.error(`[${action}] platform=${process.platform} error:`, err);
+  return res.status(500).json({
+    error: typeof err === 'string' ? err : (err?.message || String(err)),
+    action,
+    platform: process.platform,
+  });
+}
+
 // ==================== 安全工具 ====================
+
+// 跨平台路径归一化比较：Windows 大小写不敏感，且统一正斜杠便于比较
+function normPath(p) {
+  const r = path.resolve(p);
+  return isWin ? r.toLowerCase().replace(/\\/g, '/') : r;
+}
+
+// 判断 child 是否等于 parent 或在 parent 之下（带分隔符边界）
+function isPathUnder(child, parent) {
+  const c = normPath(child);
+  const p = normPath(parent);
+  if (c === p) return true;
+  // 加 / 边界，避免 C:\Foo 被 C:\Foo-evil 绕过
+  return c.startsWith(p + '/');
+}
 
 // 路径安全验证：确保路径在允许范围内
 function isPathAllowed(targetPath) {
-  const rootDir = db.getSetting('root_dir');
   const resolved = path.resolve(targetPath);
-  // 允许 root_dir 下的路径
-  if (rootDir && resolved.startsWith(path.resolve(rootDir))) return true;
-  // 允许任务 folder_path 下的路径
+  const rootDir = db.getSetting('root_dir');
+  if (rootDir && isPathUnder(resolved, rootDir)) return true;
   const tasks = db.getTasks();
   for (const t of tasks) {
-    if (t.folder_path && resolved.startsWith(path.resolve(t.folder_path))) return true;
+    if (t.folder_path && isPathUnder(resolved, t.folder_path)) return true;
   }
   return false;
-}
-
-// Shell 安全转义
-function shellEscape(str) {
-  return str.replace(/(["'\\$`!])/g, '\\$1');
 }
 
 // asyncHandler 包装器
@@ -84,7 +173,9 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 const storage = multer.diskStorage({
   destination: uploadDir,
   filename: (req, file, cb) => {
-    const safe = file.originalname.replace(/[^\w.\-]/g, '_');
+    // 保留中文/Unicode 文件名，仅替换 Windows/Unix 非法字符
+    // 之前 [^\w.\-] 会把中文全部替换成 _，导致 报告.docx → _.docx
+    const safe = file.originalname.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
     const uniqueName = Date.now() + '_' + Math.random().toString(36).slice(2, 8) + '_' + safe;
     cb(null, uniqueName);
   }
@@ -112,7 +203,12 @@ app.put('/api/settings', (req, res) => {
   // 其他设置写入数据库
   for (const [key, value] of Object.entries(req.body)) {
     if (key !== 'ai_configs' && ALLOWED_SETTINGS.includes(key)) {
-      db.setSetting(key, value);
+      // 路径类设置统一 normalize，避免混合分隔符（C:\foo vs C:/foo）造成后续匹配失败
+      let finalValue = value;
+      if ((key === 'root_dir' || key === 'terminal_path' || key === 'editor') && typeof value === 'string' && value.trim()) {
+        finalValue = path.normalize(value);
+      }
+      db.setSetting(key, finalValue);
     }
   }
   res.json({ success: true });
@@ -441,22 +537,36 @@ app.post('/api/tasks/:id/open-folder', (req, res) => {
 });
 
 // 用指定编辑器打开任务目录或文件
+// 短名编辑器白名单（用户在设置里可填短名 OR 完整 .exe 路径）
 const ALLOWED_EDITORS = ['obsidian', 'typora', 'vscode', 'code', 'sublime', 'textedit', 'terminal'];
+
+// 判断 editor 输入是否为完整可执行路径（含路径分隔符）
+function isEditorPath(editor) {
+  return /[\\/]/.test(editor);
+}
 
 app.post('/api/open-with-editor', asyncHandler(async (req, res) => {
   const { path: targetPath, editor } = req.body;
   if (!targetPath) return res.status(400).json({ error: '缺少 path 参数' });
   if (!isPathAllowed(targetPath)) return res.status(403).json({ error: '路径不在允许范围内' });
 
-  // 校验 editor 白名单
-  const safeEditor = (editor || '').toLowerCase().trim();
-  if (safeEditor && !ALLOWED_EDITORS.includes(safeEditor)) {
+  const rawEditor = (editor || '').trim();
+  if (!rawEditor) return res.status(400).json({ error: '缺少 editor 参数' });
+
+  // 双模式校验：
+  //   - 短名（如 obsidian/vscode）必须在白名单
+  //   - 完整路径（含 / 或 \）允许，但必须文件存在（防止注入）
+  const safeEditor = rawEditor.toLowerCase();
+  if (!isEditorPath(rawEditor) && !ALLOWED_EDITORS.includes(safeEditor)) {
     return res.status(400).json({ error: '不支持的编辑器: ' + editor });
+  }
+  if (isEditorPath(rawEditor) && !fs.existsSync(rawEditor)) {
+    return res.status(400).json({ error: '编辑器路径不存在: ' + editor });
   }
 
   // 确保文件存在
   if (!fs.existsSync(targetPath)) {
-    const dir = require('path').dirname(targetPath);
+    const dir = path.dirname(targetPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(targetPath, '', 'utf-8');
   }
@@ -464,47 +574,66 @@ app.post('/api/open-with-editor', asyncHandler(async (req, res) => {
   // 如果是目录，优先打开里面的 README.md；如果是文件直接用它
   let fileToOpen;
   if (fs.statSync(targetPath).isDirectory()) {
-    const readmePath = require('path').join(targetPath, 'README.md');
+    const readmePath = path.join(targetPath, 'README.md');
     fileToOpen = fs.existsSync(readmePath) ? readmePath : targetPath;
   } else {
     fileToOpen = targetPath;
   }
 
   const platform = process.platform;
+  let spawnArgs = null; // [cmd, args[], opts]
+
   if (platform === 'win32') {
-    let winCmd;
-    if (safeEditor === 'vscode' || safeEditor === 'code') {
-      winCmd = `code "${fileToOpen}"`;
-    } else if (safeEditor === 'obsidian') {
-      const dir = require('path').dirname(fileToOpen);
-      winCmd = `start "" "obsidian://open?path=${encodeURIComponent(dir)}"`;
-    } else {
-      // 其余编辑器用系统关联打开
-      winCmd = `start "" "${fileToOpen}"`;
-    }
-    exec(winCmd, (err) => { if (err) console.error('打开编辑器失败:', err); });
-  } else {
-    let command;
-    if (safeEditor === 'obsidian') {
-      const dir = require('path').dirname(fileToOpen);
-      command = `open -a Obsidian "${shellEscape(dir)}"`;
-    } else if (safeEditor === 'typora') {
-      command = `open -a Typora "${shellEscape(fileToOpen)}"`;
+    if (isEditorPath(rawEditor)) {
+      // 用户配置了完整 .exe 路径，直接 spawn
+      spawnArgs = [rawEditor, [fileToOpen], { detached: true, stdio: 'ignore' }];
     } else if (safeEditor === 'vscode' || safeEditor === 'code') {
-      command = `open -a "Visual Studio Code" "${shellEscape(fileToOpen)}"`;
-    } else if (safeEditor === 'sublime') {
-      command = `open -a "Sublime Text" "${shellEscape(fileToOpen)}"`;
-    } else if (safeEditor === 'textedit') {
-      command = `open -a TextEdit "${shellEscape(fileToOpen)}"`;
-    } else if (safeEditor === 'terminal') {
-      command = `open "${shellEscape(fileToOpen)}"`;
+      // code 命令依赖 PATH（VSCode 安装时勾选），shell:true 让 Windows 找 .cmd
+      spawnArgs = ['code', [fileToOpen], { detached: true, stdio: 'ignore', shell: true }];
+    } else if (safeEditor === 'obsidian') {
+      const dir = path.dirname(fileToOpen);
+      spawnArgs = ['cmd', ['/c', 'start', '', `obsidian://open?path=${encodeURIComponent(dir)}`], { detached: true, stdio: 'ignore' }];
     } else {
-      // 兜底：默认用系统关联打开
-      command = `open "${shellEscape(fileToOpen)}"`;
+      // 其余短名（typora/sublime/textedit）用系统关联打开（Windows 无 textedit）
+      spawnArgs = ['cmd', ['/c', 'start', '', fileToOpen], { detached: true, stdio: 'ignore' }];
     }
-    exec(command, (err) => {
-      if (err) console.error('打开编辑器失败:', err);
-    });
+  } else if (platform === 'darwin') {
+    const appName = {
+      typora: 'Typora',
+      vscode: 'Visual Studio Code',
+      code: 'Visual Studio Code',
+      sublime: 'Sublime Text',
+      textedit: 'TextEdit',
+    }[safeEditor];
+
+    if (isEditorPath(rawEditor)) {
+      spawnArgs = [rawEditor, [fileToOpen], { detached: true, stdio: 'ignore' }];
+    } else if (safeEditor === 'obsidian') {
+      // Obsidian 走目录而非 README 文件
+      spawnArgs = ['open', ['-a', 'Obsidian', path.dirname(fileToOpen)], { detached: true, stdio: 'ignore' }];
+    } else if (appName) {
+      spawnArgs = ['open', ['-a', appName, fileToOpen], { detached: true, stdio: 'ignore' }];
+    } else {
+      spawnArgs = ['open', [fileToOpen], { detached: true, stdio: 'ignore' }];
+    }
+  } else {
+    // Linux
+    if (isEditorPath(rawEditor)) {
+      spawnArgs = [rawEditor, [fileToOpen], { detached: true, stdio: 'ignore' }];
+    } else if (safeEditor === 'vscode' || safeEditor === 'code') {
+      spawnArgs = ['code', [fileToOpen], { detached: true, stdio: 'ignore' }];
+    } else {
+      spawnArgs = ['xdg-open', [fileToOpen], { detached: true, stdio: 'ignore' }];
+    }
+  }
+
+  try {
+    const [cmd, args, opts] = spawnArgs;
+    const child = spawn(cmd, args, opts);
+    child.on('error', (e) => console.error(`[open-with-editor] spawn error: ${cmd}:`, e.message));
+    child.unref();
+  } catch (e) {
+    return sendPlatformError(res, 'open-with-editor', e);
   }
   res.json({ success: true });
 }));
@@ -541,49 +670,106 @@ app.post('/api/tasks/:id/append-readme', asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
+// 异步执行 PowerShell 脚本，捕获 stdout（不阻塞 Node 主线程）
+// 返回 { ok, stdout, stderr, error }
+function runPowerShell(script) {
+  return new Promise((resolve) => {
+    const shell = findPowerShell();
+    if (!shell) {
+      return resolve({ ok: false, error: '未找到 pwsh.exe 或 powershell.exe' });
+    }
+    const child = spawn(shell, [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-OutputFormat', 'Text',
+      '-EncodedCommand', encodePSScript(script),
+    ], { windowsHide: false });
+    let stdout = '', stderr = '';
+    let settled = false;
+    const done = (r) => { if (!settled) { settled = true; resolve(r); } };
+    child.stdout.on('data', (d) => { stdout += d.toString('utf8'); });
+    child.stderr.on('data', (d) => { stderr += d.toString('utf8'); });
+    child.on('error', (e) => done({ ok: false, stdout, stderr, error: e.message }));
+    child.on('close', (code) => {
+      // 退出码非 0 通常是用户取消对话框，视为 cancelled 而非错误
+      done({ ok: code === 0, stdout: stdout.trim(), stderr: stderr.trim(), error: code !== 0 ? `exit=${code}` : null });
+    });
+    setTimeout(() => {
+      try { child.kill(); } catch (_) {}
+      done({ ok: false, stdout, stderr, error: 'PowerShell 60s 超时' });
+    }, 60000).unref();
+  });
+}
+
 // 系统原生文件夹选择器（macOS Finder / Windows / Linux）
 app.post('/api/pick-folder', asyncHandler(async (req, res) => {
   const platform = process.platform;
-  let folderPath = '';
-  try {
-    if (platform === 'darwin') {
-      folderPath = execSync(`osascript -e 'choose folder' -e 'POSIX path of result'`, { encoding: 'utf-8', timeout: 60000 }).trim();
-    } else if (platform === 'win32') {
-      folderPath = execSync(
-        `powershell -NoProfile -ExecutionPolicy Bypass -STA -Command "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = '选择任务根目录'; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }"`,
-        { encoding: 'utf-8', timeout: 60000 }
-      ).trim();
-    } else {
-      // Linux: try zenity
-      folderPath = execSync('zenity --file-selection --directory 2>/dev/null || echo ""', { encoding: 'utf-8', timeout: 60000 }).trim();
+  if (platform === 'darwin') {
+    try {
+      const folderPath = execSync(`osascript -e 'choose folder' -e 'POSIX path of result'`, { encoding: 'utf-8', timeout: 60000 }).trim();
+      if (!folderPath) return res.json({ cancelled: true });
+      return res.json({ path: folderPath });
+    } catch (e) {
+      return res.json({ cancelled: true });
     }
-  } catch (e) {
-    // user cancelled
-    return res.json({ cancelled: true });
+  } else if (platform === 'win32') {
+    const script = `Add-Type -AssemblyName System.Windows.Forms
+$f = New-Object System.Windows.Forms.FolderBrowserDialog
+$f.Description = '选择任务根目录'
+if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }`;
+    const r = await runPowerShell(script);
+    if (!r.ok) {
+      // 用户取消 / 超时 / 无 PowerShell 一律视为 cancelled（前端不需区分）
+      if (r.error && r.error.includes('未找到')) return sendPlatformError(res, 'pick-folder', r.error);
+      return res.json({ cancelled: true });
+    }
+    if (!r.stdout) return res.json({ cancelled: true });
+    return res.json({ path: r.stdout });
+  } else {
+    try {
+      const folderPath = execSync('zenity --file-selection --directory 2>/dev/null || echo ""', { encoding: 'utf-8', timeout: 60000 }).trim();
+      if (!folderPath) return res.json({ cancelled: true });
+      return res.json({ path: folderPath });
+    } catch (e) {
+      return res.json({ cancelled: true });
+    }
   }
-  if (!folderPath) return res.json({ cancelled: true });
-  res.json({ path: folderPath });
 }));
 
 app.post('/api/pick-file', asyncHandler(async (req, res) => {
   const platform = process.platform;
-  let filePath = '';
-  try {
-    if (platform === 'darwin') {
-      filePath = execSync(`osascript -e 'choose file' -e 'POSIX path of result'`, { encoding: 'utf-8', timeout: 60000 }).trim();
-    } else if (platform === 'win32') {
-      filePath = execSync(
-        `powershell -NoProfile -ExecutionPolicy Bypass -STA -Command "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = '可执行文件 (*.exe;*.bat;*.cmd)|*.exe;*.bat;*.cmd|所有文件 (*.*)|*.*'; if ($d.ShowDialog() -eq 'OK') { Write-Output $d.FileName }"`,
-        { encoding: 'utf-8', timeout: 60000 }
-      ).trim();
-    } else {
-      filePath = execSync('zenity --file-selection 2>/dev/null || echo ""', { encoding: 'utf-8', timeout: 60000 }).trim();
+  const filter = req.body?.filter || 'exec'; // 'exec' (默认) | 'any'
+  if (platform === 'darwin') {
+    try {
+      const filePath = execSync(`osascript -e 'choose file' -e 'POSIX path of result'`, { encoding: 'utf-8', timeout: 60000 }).trim();
+      if (!filePath) return res.json({ cancelled: true });
+      return res.json({ path: filePath });
+    } catch (e) {
+      return res.json({ cancelled: true });
     }
-  } catch (e) {
-    return res.json({ cancelled: true });
+  } else if (platform === 'win32') {
+    // 过滤器包含 .lnk 快捷方式（Windows 用户常通过快捷方式启动应用）
+    const filterLine = filter === 'any'
+      ? "所有文件 (*.*)|*.*"
+      : "可执行/快捷方式 (*.exe;*.bat;*.cmd;*.lnk)|*.exe;*.bat;*.cmd;*.lnk|所有文件 (*.*)|*.*";
+    const script = `Add-Type -AssemblyName System.Windows.Forms
+$d = New-Object System.Windows.Forms.OpenFileDialog
+$d.Filter = '${filterLine}'
+if ($d.ShowDialog() -eq 'OK') { Write-Output $d.FileName }`;
+    const r = await runPowerShell(script);
+    if (!r.ok) {
+      if (r.error && r.error.includes('未找到')) return sendPlatformError(res, 'pick-file', r.error);
+      return res.json({ cancelled: true });
+    }
+    if (!r.stdout) return res.json({ cancelled: true });
+    return res.json({ path: r.stdout });
+  } else {
+    try {
+      const filePath = execSync('zenity --file-selection 2>/dev/null || echo ""', { encoding: 'utf-8', timeout: 60000 }).trim();
+      if (!filePath) return res.json({ cancelled: true });
+      return res.json({ path: filePath });
+    } catch (e) {
+      return res.json({ cancelled: true });
+    }
   }
-  if (!filePath) return res.json({ cancelled: true });
-  res.json({ path: filePath });
 }));
 
 app.post('/api/attachments/open', asyncHandler(async (req, res) => {
@@ -926,22 +1112,52 @@ app.post('/api/launch-terminal', asyncHandler(async (req, res) => {
 
   try {
     if (platform === 'win32') {
+      // ⚠️ spawn 数组传参，绝不手动加引号（之前的写法会把字面 " 当路径字符）
       if (terminalPath.toLowerCase() === 'cmd') {
-        spawn('cmd', ['/c', `cd /d "${directory}" && start cmd`], { detached: true, stdio: 'ignore' }).unref();
+        // cmd /c start cmd /d "<dir>"  —— start 启动新 cmd，/d 设置工作目录
+        spawn('cmd', ['/c', 'start', 'cmd', '/d', directory], { detached: true, stdio: 'ignore' }).unref();
       } else {
-        // Windows Terminal (wt.exe) 支持 -d，其他终端用 start /d
-        const termName = terminalPath.toLowerCase();
-        if (termName.includes('wt.exe') || termName.endsWith('wt')) {
-          spawn('cmd', ['/c', 'start', '""', '"wt.exe"', '-d', `"${directory}"`], { detached: true, stdio: 'ignore' }).unref();
+        // 用 path.basename 鲁棒判断 wt（用户可能填完整路径如 C:\Users\xxx\wt.exe）
+        const base = path.basename(terminalPath).toLowerCase();
+        const isWt = base === 'wt.exe' || base === 'wt';
+        if (isWt) {
+          // wt.exe -d "<dir>"（直接 spawn wt 即可，无需 cmd /c start）
+          spawn(terminalPath, ['-d', directory], { detached: true, stdio: 'ignore' }).unref();
         } else {
-          spawn('cmd', ['/c', 'start', '""', '/d', `"${directory}"`, `"${terminalPath}"`], { detached: true, stdio: 'ignore' }).unref();
+          // 其他终端（如 WezTerm/Alacritty/Hyper）：
+          // 直接 spawn 终端可执行文件 + cwd 选项，避免 start 命令对含空格路径的分词 bug
+          // shell:true 让 Windows 自动处理 PATH 查找和 .exe/.cmd 拓展名
+          try {
+            const child = spawn(terminalPath, [], {
+              cwd: directory,
+              detached: true,
+              stdio: 'ignore',
+              shell: false,
+            });
+            child.on('error', (e) => {
+              // spawn 失败（如 terminalPath 不存在或不在 PATH）→ 兜底用 start
+              console.error(`[launch-terminal] spawn "${terminalPath}" 失败, 回退 start:`, e.message);
+              try {
+                spawn('cmd', ['/c', 'start', '', '/d', directory, terminalPath], { detached: true, stdio: 'ignore', shell: true }).unref();
+              } catch (_) {}
+            });
+            child.unref();
+          } catch (e) {
+            sendPlatformError(res, 'launch-terminal', e);
+            return;
+          }
         }
       }
     } else if (platform === 'darwin') {
       if (terminalPath && terminalPath !== 'Terminal') {
+        // 用户配置了 iTerm2 / Hyper 等
         spawn('open', ['-a', terminalPath, directory], { detached: true, stdio: 'ignore' }).unref();
       } else {
-        exec(`osascript -e 'tell application "Terminal"\nactivate\ndo script "cd \\"${shellEscape(directory)}\\" && clear"\nend tell'`);
+        // 默认 Terminal.app 用 AppleScript 打开新窗口并 cd
+        // osascript 字符串内的转义需手动处理（osascript 是 shell 命令）
+        const safeDir = directory.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        const script = `tell application "Terminal"\nactivate\ndo script "cd \\"${safeDir}\\" && clear"\nend tell`;
+        spawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' }).unref();
       }
     } else {
       // Linux
@@ -950,7 +1166,7 @@ app.post('/api/launch-terminal', asyncHandler(async (req, res) => {
     }
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: '启动终端失败: ' + err.message });
+    sendPlatformError(res, 'launch-terminal', err);
   }
 }));
 
@@ -1427,12 +1643,14 @@ app.post('/api/conversations/:id/continue', asyncHandler(async (req, res) => {
   const platform = process.platform;
   let runCmd;
   if (platform === 'win32') {
-    const safeCwdWin = `"${cwd.replace(/%/g, '%%')}"`;
-    const safeSessionWin = (conv.session_id || '').replace(/"/g, '""');
+    // cmd 元字符转义：& | < > ^ 用 ^ 前缀防命令拼接注入；% 重复防变量展开
+    const escCmd = (s) => String(s).replace(/[&|<>^]/g, '^$&').replace(/%/g, '%%');
+    const safeCwd = escCmd(cwd);
+    const safeSession = escCmd(conv.session_id || '');
     if (conv.tool === 'opencode') {
-      runCmd = `cd /d ${safeCwdWin} && opencode --session "${safeSessionWin}"`;
+      runCmd = `cd /d "${safeCwd}" && opencode --session "${safeSession}"`;
     } else {
-      runCmd = `cd /d ${safeCwdWin} && claude --resume "${safeSessionWin}"`;
+      runCmd = `cd /d "${safeCwd}" && claude --resume "${safeSession}"`;
     }
     spawn('cmd', ['/c', 'start', 'cmd', '/k', runCmd], { detached: true, stdio: 'ignore' }).unref();
   } else {
@@ -1630,11 +1848,11 @@ app.get('*', (req, res) => {
     const platform = process.platform;
     const url = `http://localhost:${PORT}`;
     if (platform === 'darwin') {
-      exec(`open "${url}"`);
+      spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
     } else if (platform === 'win32') {
-      exec(`start "" "${url}"`);
+      spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' }).unref();
     } else {
-      exec(`xdg-open "${url}"`);
+      spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
     }
   });
   server.on('error', (err) => {

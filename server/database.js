@@ -3,6 +3,25 @@ const path = require('path');
 const os = require('os');
 const initSqlJs = require('sql.js');
 
+const _isWin = process.platform === 'win32';
+// 跨平台路径归一化：Windows 大小写不敏感 + 统一正斜杠
+function normPath(p) {
+  const r = path.resolve(p);
+  return _isWin ? r.toLowerCase().replace(/\\/g, '/') : r;
+}
+// 判断 child 是否在 parent 之下（含分隔符边界）
+function isPathUnder(child, parent) {
+  const c = normPath(child);
+  const p = normPath(parent);
+  if (c === p) return true;
+  return c.startsWith(p + '/');
+}
+// 写入 DB 前规范化 folder_path，避免 C:\foo vs C:/foo 混存导致去重/匹配失败
+function normalizeFolderPath(p) {
+  if (!p || typeof p !== 'string') return p;
+  return path.normalize(p);
+}
+
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'godtodo.db');
 const JSON_FILE = path.join(DATA_DIR, 'db.json');
@@ -707,7 +726,14 @@ function updateTask(id, d) {
   for (const [k, v] of Object.entries(d)) {
     if (allowed.includes(k)) {
       fields.push(`${k} = ?`);
-      params.push(k === 'paths' ? JSON.stringify(v) : v);
+      if (k === 'paths') {
+        params.push(JSON.stringify(v));
+      } else if (k === 'folder_path') {
+        // 写入前规范化，避免 C:\foo vs C:/foo 混存
+        params.push(normalizeFolderPath(v));
+      } else {
+        params.push(v);
+      }
     }
   }
   if (fields.length === 0) return;
@@ -828,10 +854,8 @@ function addAttachment(taskId, fileName, filePath, fileType, fileSize) {
 function deleteAttachment(attId) {
   const att = queryOne('SELECT a.file_path, t.folder_path FROM attachments a LEFT JOIN tasks t ON a.task_id = t.id WHERE a.id = ?', [attId]);
   if (att && att.file_path) {
-    // Only delete file if it's under the task's folder_path
-    const filePath = path.resolve(att.file_path);
-    const folderPath = att.folder_path ? path.resolve(att.folder_path) : '';
-    if (folderPath && filePath.startsWith(folderPath)) {
+    // 仅当文件在任务 folder_path 之下时才物理删除（含分隔符边界 + 大小写归一化）
+    if (att.folder_path && isPathUnder(att.file_path, att.folder_path)) {
       try { fs.unlinkSync(att.file_path); } catch (e) { /* ignore */ }
     }
   }

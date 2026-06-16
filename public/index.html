@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GodTodoList - 事项管理体系</title>
-  <link rel="stylesheet" href="/css/style.css?v=53">
+  <link rel="stylesheet" href="/css/style.css?v=56">
 </head>
 <body>
   <!-- 页面加载过渡：Vue 接管前显示，避免 v-if 弹窗闪烁 -->
@@ -998,11 +998,11 @@
           <div class="form-group">
             <label>笔记编辑器</label>
             <div style="display:flex;gap:8px">
-              <input type="text" v-model="settings.editor" class="input" @blur="saveSettings" placeholder="如 Obsidian / Typora / VS Code" style="flex:1">
+              <input type="text" v-model="settings.editor" class="input" @blur="saveSettings" placeholder="短名（Obsidian/VS Code）或完整路径" style="flex:1">
               <button class="btn btn-sm" @click="pickFileFor('editor')">📂 选择</button>
               <button class="btn btn-sm" @click="settings.editor = ''; saveSettings()" v-if="settings.editor">✕</button>
             </div>
-            <p class="form-hint">选择编辑器可执行文件，Mac 可选 .app</p>
+            <p class="form-hint">支持短名（obsidian/typora/vscode/code/sublime）或通过「选择」指定可执行文件完整路径，Windows 可选 .exe/.lnk</p>
           </div>
           </div>
 
@@ -1126,7 +1126,8 @@
                 </div>
                 <div class="ai-suggest-item">
                   <span class="ai-suggest-label">描述</span>
-                  <input type="text" v-model="aiSuggestions.description" class="input ai-suggest-input">
+                  <textarea v-model="aiSuggestions.description" class="input ai-suggest-input" rows="2"
+                            style="resize:vertical;min-height:38px"></textarea>
                 </div>
                 <div class="ai-suggest-item" v-if="aiSuggestions.estimated_time != null">
                   <span class="ai-suggest-label">预估</span>
@@ -1135,19 +1136,19 @@
                   <input v-else type="number" v-model.number="aiSuggestions.estimated_time" class="input ai-suggest-input"
                          min="0" @blur="aiSuggestions._editingTime = false" ref="aiTimeInput">
                 </div>
-                <div v-if="!selectedTask.folder_path" style="display:flex;gap:8px;font-size:var(--text-sm);margin-bottom:2px">
-                  <span class="ai-suggest-label" style="padding-top:4px">📁 目录</span>
-                  <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:5px">
+                <div v-if="!selectedTask.folder_path" class="ai-folder-row">
+                  <span class="ai-suggest-label">📁 目录</span>
+                  <div class="ai-folder-controls">
                     <template v-if="!aiSuggestions.reuse_folder_path">
-                      <div style="display:flex;align-items:center;gap:4px">
+                      <div class="ai-folder-input-line">
                         <input type="text" v-model="aiSuggestions.folder_name" class="input ai-suggest-input"
-                               placeholder="新目录名（在根目录下创建）" style="flex:1">
+                               placeholder="新目录名（在根目录下创建）">
                         <button class="btn btn-xs" @click="aiPickFolder">📂 选择已有目录</button>
                       </div>
                     </template>
-                    <div v-else style="font-size:11px;color:var(--success);word-break:break-all;display:flex;align-items:center;gap:4px">
+                    <div v-else class="ai-folder-reused">
                       ✅ {{ aiSuggestions.reuse_folder_path }}
-                      <button style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-3)" @click="aiSuggestions.reuse_folder_path = ''">× 清除</button>
+                      <button class="ai-folder-clear-btn" @click="aiSuggestions.reuse_folder_path = ''">× 清除</button>
                     </div>
                   </div>
                 </div>
@@ -1155,9 +1156,9 @@
                   <span class="ai-suggest-label">标签</span>
                   <span class="ai-suggest-value">
                     <span class="tag-pill selectable" v-for="(tid, ti) in aiSuggestions.tag_ids" :key="tid"
-                          :style="{ background: (tags.find(t=>t.id===tid)?.color||'#888')+'18', color: tags.find(t=>t.id===tid)?.color||'var(--text-3)' }"
+                          :style="{ background: (tagMap.get(tid)?.color||'#888')+'18', color: tagMap.get(tid)?.color||'var(--text-3)' }"
                           @click="aiSuggestions.tag_ids.splice(ti, 1)">
-                      {{ tags.find(t => t.id === tid)?.icon }}{{ tags.find(t => t.id === tid)?.name || tid }} ×
+                      {{ tagMap.get(tid)?.icon }}{{ tagMap.get(tid)?.name || tid }} ×
                     </span>
                   </span>
                 </div>
@@ -1219,10 +1220,11 @@
                 </div>
               </div>
             </div>
-            <div class="detail-section" v-if="isReportTask">
-              <label>🗣️ 汇报会议</label>
+            <div class="detail-section">
+              <label>🗣️ 汇报会议<span v-if="!isReportTask" class="hint-text" style="margin-left:6px;font-weight:400">需先选「📊 汇报」标签才会纳入汇报</span></label>
               <input type="text" v-model="selectedTask.report_meeting" class="input"
-                     placeholder="如：部门周会、月度Review..."
+                     :disabled="!isReportTask"
+                     :placeholder="isReportTask ? '如：部门周会、月度Review...' : '请先在「基本」tab 选择汇报标签'"
                      list="report-meeting-list" @blur="saveSelectedTask">
               <datalist id="report-meeting-list">
                 <option v-for="m in reportMeetings" :key="m" :value="m">
@@ -1364,10 +1366,10 @@
               <label>关联路径</label>
               <div class="path-list">
                 <!-- 主路径 -->
-                <div class="path-item path-primary" v-if="selectedTask.folder_path" style="border-left:3px solid var(--primary);padding-left:6px">
-                  <span style="font-size:10px;color:var(--primary);margin-right:4px">⭐ 主</span>
+                <div class="path-item path-primary" v-if="selectedTask.folder_path">
+                  <span class="path-primary-badge">⭐ 主</span>
                   <span class="path-name" @click="openFolder" :title="selectedTask.folder_path">{{ selectedTask.folder_path.split(/[/\\]/).pop() }}</span>
-                  <span class="path-readme" v-if="pathReadmeStatus[selectedTask.folder_path]" style="font-size:10px;color:var(--text-3)" :title="'有 README'">📄</span>
+                  <span class="path-readme-badge" v-if="pathReadmeStatus[selectedTask.folder_path]" :title="'有 README'">📄</span>
                   <div style="flex:1"></div>
                   <button class="btn btn-xs" @click="openFolder">打开</button>
                   <button class="btn btn-xs" @click="checkPathReadme(selectedTask.folder_path)" title="检查 README">🔍</button>
@@ -1379,11 +1381,10 @@
                      @dragstart="onPathDragStart($event, pi)"
                      @dragover.prevent="onPathDragOver($event, pi)"
                      @drop="onPathDrop($event, pi)"
-                     :class="{ 'path-dragging': dragPathIndex === pi, 'path-drag-over': dragPathOverIndex === pi }"
-                     style="cursor:grab">
-                  <span class="drag-handle" style="font-size:10px;color:var(--text-3);margin-right:2px">⠿</span>
+                     :class="{ 'path-dragging': dragPathIndex === pi, 'path-drag-over': dragPathOverIndex === pi }">
+                  <span class="path-drag-handle">⠿</span>
                   <span class="path-name" @click="openFolderFor(p)" :title="p">{{ p.split(/[/\\]/).pop() || p }}</span>
-                  <span class="path-readme" v-if="pathReadmeStatus[p]" style="font-size:10px;color:var(--text-3)" :title="'有 README'">📄</span>
+                  <span class="path-readme-badge" v-if="pathReadmeStatus[p]" :title="'有 README'">📄</span>
                   <div style="flex:1"></div>
                   <button class="btn btn-xs" @click="openFolderFor(p)">打开</button>
                   <button class="btn btn-xs" @click="setPrimaryPath(pi)" title="设为主路径">⭐</button>
@@ -1400,6 +1401,7 @@
             <div class="detail-section">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
                 <label style="margin:0">🤖 AI 会话</label>
+                <!-- scanConversations('')：directory 传空字符串 → 扫描默认 AI 会话目录 -->
                 <button class="btn btn-xs" @click="scanConversations(''); showScanModal = true">🔍 发现</button>
               </div>
               <div v-if="taskConversations.length === 0" class="conv-empty">暂无关联会话，点击"发现"扫描</div>
@@ -1531,9 +1533,9 @@
             </div>
             <div class="form-group" v-else>
               <label><i class="label-icon">📂</i>使用已有目录</label>
-              <div style="font-size:var(--text-xs);color:var(--success);word-break:break-all;display:flex;align-items:center;gap:4px">
+              <div class="ai-folder-reused">
                 ✅ {{ newTask.reuse_folder_path }}
-                <button style="font-size:10px;background:none;border:none;cursor:pointer;color:var(--text-3)" @click="newTask.reuse_folder_path = ''">× 清除</button>
+                <button class="ai-folder-clear-btn" @click="newTask.reuse_folder_path = ''">× 清除</button>
               </div>
             </div>
             <!-- 汇报会议名（仅在选了「汇报」标签时显示） -->
@@ -1785,6 +1787,6 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
-  <script src="/js/app.js?v=75"></script>
+  <script src="/js/app.js?v=79"></script>
 </body>
 </html>
