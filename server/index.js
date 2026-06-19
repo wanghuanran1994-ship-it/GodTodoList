@@ -1924,8 +1924,14 @@ app.put('/api/note-items/reorder', (req, res) => {
 
 app.put('/api/note-items/:id', (req, res) => {
   const body = req.body;
-  // body.icon 可能是 undefined（不修改）/ null（清除）/ 字符串
-  db.updateNoteItem(Number(req.params.id), body.content || '', body.parent_id, body.icon);
+  // ⚠️ 字段级 patch：只更新 body 里明确出现的字段
+  // 之前 `body.content || ''` 会把 undefined 变成空串，导致 setItemIcon（只传 icon）冲掉现有 content
+  const patch = {};
+  if (body.content !== undefined) patch.content = body.content;
+  if (body.parent_id !== undefined) patch.parent_id = body.parent_id;
+  // icon: undefined=不修改 / null=清除 / 字符串=设置
+  if (body.icon !== undefined) patch.icon = body.icon;
+  db.updateNoteItem(Number(req.params.id), patch);
   res.json({ success: true });
 });
 

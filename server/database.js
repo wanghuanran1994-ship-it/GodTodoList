@@ -77,6 +77,8 @@ function createTables() {
     color TEXT DEFAULT '#3b82f6',
     sort_order INTEGER DEFAULT 0,
     archived INTEGER DEFAULT 0,
+    paths TEXT DEFAULT '[]',
+    target_date TEXT,
     created_at TEXT,
     updated_at TEXT
   )`);
@@ -89,6 +91,8 @@ function createTables() {
     frequency TEXT DEFAULT 'weekly',
     sort_order INTEGER DEFAULT 0,
     archived INTEGER DEFAULT 0,
+    is_report INTEGER DEFAULT 0,
+    report_meeting TEXT DEFAULT '',
     created_at TEXT,
     updated_at TEXT
   )`);
@@ -118,6 +122,11 @@ function createTables() {
     is_today INTEGER DEFAULT 0,
     timer_started_at TEXT,
     completed_at TEXT,
+    ai_progress TEXT DEFAULT '',
+    is_report INTEGER DEFAULT 0,
+    sort_order REAL DEFAULT 0,
+    report_meeting TEXT DEFAULT '',
+    paths TEXT DEFAULT '[]',
     created_at TEXT,
     updated_at TEXT
   )`);
@@ -128,6 +137,7 @@ function createTables() {
     title TEXT NOT NULL,
     status TEXT DEFAULT 'todo',
     sort_order INTEGER DEFAULT 0,
+    depends_on INTEGER,
     created_at TEXT,
     updated_at TEXT
   )`);
@@ -221,6 +231,7 @@ function createTables() {
     content TEXT DEFAULT '',
     sort_order INTEGER DEFAULT 0,
     parent_id INTEGER,
+    icon TEXT,
     created_at TEXT,
     FOREIGN KEY (card_id) REFERENCES note_cards(id) ON DELETE CASCADE
   )`);
@@ -449,6 +460,20 @@ function queryAll(sql, params = []) {
 function queryOne(sql, params = []) {
   const rows = queryAll(sql, params);
   return rows[0] || null;
+}
+
+// 事务包装：多步写操作必须原子，避免中间失败留下孤儿数据
+// （如 deleteTask 删了 subtasks 但 tasks 失败 → 任务消失但子任务残留）
+function dbTransaction(fn) {
+  db.run('BEGIN');
+  try {
+    const result = fn();
+    db.run('COMMIT');
+    return result;
+  } catch (e) {
+    try { db.run('ROLLBACK'); } catch (_) {}
+    throw e;
+  }
 }
 
 function run(sql, params = []) {
@@ -785,12 +810,14 @@ function updateTask(id, d) {
 }
 
 function deleteTask(id) {
-  db.run('DELETE FROM subtasks WHERE task_id = ?', [id]);
-  db.run('DELETE FROM task_tags WHERE task_id = ?', [id]);
-  db.run('DELETE FROM task_people WHERE task_id = ?', [id]);
-  db.run('DELETE FROM attachments WHERE task_id = ?', [id]);
-  db.run('DELETE FROM time_logs WHERE task_id = ?', [id]);
-  db.run('DELETE FROM tasks WHERE id = ?', [id]);
+  dbTransaction(() => {
+    db.run('DELETE FROM subtasks WHERE task_id = ?', [id]);
+    db.run('DELETE FROM task_tags WHERE task_id = ?', [id]);
+    db.run('DELETE FROM task_people WHERE task_id = ?', [id]);
+    db.run('DELETE FROM attachments WHERE task_id = ?', [id]);
+    db.run('DELETE FROM time_logs WHERE task_id = ?', [id]);
+    db.run('DELETE FROM tasks WHERE id = ?', [id]);
+  });
   save();
 }
 
@@ -832,12 +859,14 @@ function deleteTag(id) {
 }
 
 function setTaskTags(taskId, tagIds) {
-  db.run('DELETE FROM task_tags WHERE task_id = ?', [taskId]);
-  for (const tagId of tagIds) {
-    db.run('INSERT OR IGNORE INTO task_tags (task_id, tag_id) VALUES (?, ?)', [taskId, tagId]);
-  }
-  // 同步 is_today / is_report 字段（与系统标签双向绑定）
-  syncTaskFlagsFromTags(taskId, tagIds);
+  dbTransaction(() => {
+    db.run('DELETE FROM task_tags WHERE task_id = ?', [taskId]);
+    for (const tagId of tagIds) {
+      db.run('INSERT OR IGNORE INTO task_tags (task_id, tag_id) VALUES (?, ?)', [taskId, tagId]);
+    }
+    // 同步 is_today / is_report 字段（与系统标签双向绑定）
+    syncTaskFlagsFromTags(taskId, tagIds);
+  });
   save();
 }
 
@@ -857,13 +886,15 @@ function syncTaskFlagsFromTags(taskId, tagIds) {
 // ==================== People ====================
 
 function setTaskPeople(taskId, people) {
-  db.run('DELETE FROM task_people WHERE task_id = ?', [taskId]);
-  for (const p of people) {
-    if (p.trim()) {
-      db.run('INSERT OR IGNORE INTO task_people (task_id, person_name) VALUES (?, ?)', [taskId, p.trim()]);
-      ensureContact(p.trim());
+  dbTransaction(() => {
+    db.run('DELETE FROM task_people WHERE task_id = ?', [taskId]);
+    for (const p of people) {
+      if (p.trim()) {
+        db.run('INSERT OR IGNORE INTO task_people (task_id, person_name) VALUES (?, ?)', [taskId, p.trim()]);
+        ensureContact(p.trim());
+      }
     }
-  }
+  });
   save();
 }
 
@@ -1129,18 +1160,50 @@ function getAIContext() {
   const routines = queryAll('SELECT * FROM routines WHERE archived = 0');
 
   let context = `你是用户的职场AI军师，帮助管理任务、规划工作、分析效率。\n\n`;
+  // ⚠️ 批量预加载：之前每个 goal 2 次查询、每个 task 2 次查询是 N+1
+  // goals 任务计数（一次 GROUP BY 拿到所有 goal 的 total + done）
+  const goalStats = {};
+  if (goals.length) {
+    const goalIds = goals.map(g => g.id);
+    const gPh = goalIds.map(() => '?').join(',');
+    queryAll(
+      `SELECT goal_id, COUNT(*) as total, SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done
+       FROM tasks WHERE goal_id IN (${gPh}) GROUP BY goal_id`, goalIds
+    ).forEach(r => { goalStats[r.goal_id] = { total: r.total, done: r.done }; });
+  }
   context += `## 当前目标\n`;
   for (const g of goals) {
-    const cnt = queryOne('SELECT COUNT(*) as c FROM tasks WHERE goal_id = ?', [g.id]);
-    const done = queryOne('SELECT COUNT(*) as c FROM tasks WHERE goal_id = ? AND status = "done"', [g.id]);
-    context += `- **${g.name}**: ${cnt.c}个任务, 完成${done.c}个\n`;
+    const s = goalStats[g.id] || { total: 0, done: 0 };
+    context += `- **${g.name}**: ${s.total}个任务, 完成${s.done}个\n`;
   }
 
+  // active tasks 的 goal name 和 tags 批量预加载
+  const taskGoalNames = {};
+  if (activeTasks.length) {
+    const uniqGoalIds = [...new Set(activeTasks.map(t => t.goal_id).filter(Boolean))];
+    if (uniqGoalIds.length) {
+      const ugPh = uniqGoalIds.map(() => '?').join(',');
+      queryAll(`SELECT id, name FROM goals WHERE id IN (${ugPh})`, uniqGoalIds)
+        .forEach(r => { taskGoalNames[r.id] = r.name; });
+    }
+  }
+  const taskTagsMap = {};
+  if (activeTasks.length) {
+    const taskIds = activeTasks.map(t => t.id);
+    const tPh = taskIds.map(() => '?').join(',');
+    queryAll(
+      `SELECT tt.task_id, t.name FROM tags t JOIN task_tags tt ON t.id = tt.tag_id WHERE tt.task_id IN (${tPh})`,
+      taskIds
+    ).forEach(r => {
+      if (!taskTagsMap[r.task_id]) taskTagsMap[r.task_id] = [];
+      taskTagsMap[r.task_id].push(r.name);
+    });
+  }
   context += `\n## 活跃任务 (${activeTasks.length})\n`;
   for (const t of activeTasks) {
-    const g = t.goal_id ? queryOne('SELECT name FROM goals WHERE id = ?', [t.goal_id]) : null;
-    const tagNames = queryAll('SELECT t.name FROM tags t JOIN task_tags tt ON t.id = tt.tag_id WHERE tt.task_id = ?', [t.id]).map(r => r.name);
-    context += `- **${t.title}** [${t.status}]${g ? ` → 目标:${g.name}` : ''}${tagNames.length ? ` 标签:${tagNames.join(',')}` : ''}${t.due_date ? ` 截止:${t.due_date}` : ''}${t.estimated_time ? ` 预估:${t.estimated_time}分` : ''}\n`;
+    const gName = t.goal_id ? taskGoalNames[t.goal_id] : null;
+    const tagNames = taskTagsMap[t.id] || [];
+    context += `- **${t.title}** [${t.status}]${gName ? ` → 目标:${gName}` : ''}${tagNames.length ? ` 标签:${tagNames.join(',')}` : ''}${t.due_date ? ` 截止:${t.due_date}` : ''}${t.estimated_time ? ` 预估:${t.estimated_time}分` : ''}\n`;
   }
 
   context += `\n## 今日已完成 (${doneToday.length})\n`;
@@ -1169,8 +1232,21 @@ function getAIContext() {
 
 function getNoteCards() {
   const cards = queryAll('SELECT * FROM note_cards ORDER BY sort_order DESC, created_at DESC');
+  if (!cards.length) return cards;
+  // ⚠️ 批量加载 items：之前每个 card 一次 query 是 N+1（50 卡片 = 50 次查询）
+  const cardIds = cards.map(c => c.id);
+  const placeholders = cardIds.map(() => '?').join(',');
+  const allItems = queryAll(
+    `SELECT * FROM note_items WHERE card_id IN (${placeholders}) ORDER BY card_id, sort_order ASC, id ASC`,
+    cardIds
+  );
+  const itemsByCard = {};
+  for (const it of allItems) {
+    if (!itemsByCard[it.card_id]) itemsByCard[it.card_id] = [];
+    itemsByCard[it.card_id].push(it);
+  }
   for (const c of cards) {
-    c.items = queryAll('SELECT * FROM note_items WHERE card_id = ? ORDER BY sort_order ASC, id ASC', [c.id]);
+    c.items = itemsByCard[c.id] || [];
   }
   return cards;
 }
@@ -1200,8 +1276,10 @@ function updateNoteCard(id, data) {
 }
 
 function deleteNoteCard(id) {
-  db.run('DELETE FROM note_items WHERE card_id = ?', [id]);
-  db.run('DELETE FROM note_cards WHERE id = ?', [id]);
+  dbTransaction(() => {
+    db.run('DELETE FROM note_items WHERE card_id = ?', [id]);
+    db.run('DELETE FROM note_cards WHERE id = ?', [id]);
+  });
   save();
 }
 
@@ -1215,18 +1293,16 @@ function addNoteItem(cardId, content, parentId) {
   return queryOne('SELECT last_insert_rowid() as id').id;
 }
 
-function updateNoteItem(id, content, parentId, icon) {
+function updateNoteItem(id, patch) {
+  // patch: { content?, parent_id?, icon? } — 只更新传入的字段，避免 icon-only 调用把 content 清空
+  const fields = []; const params = [];
+  if (patch.content !== undefined) { fields.push('content = ?'); params.push(patch.content || ''); }
+  if (patch.parent_id !== undefined) { fields.push('parent_id = ?'); params.push(patch.parent_id || null); }
   // icon: undefined=不修改, null=清除(用默认), 字符串=设置
-  if (icon !== undefined && parentId !== undefined) {
-    db.run('UPDATE note_items SET content = ?, parent_id = ?, icon = ? WHERE id = ?',
-      [content || '', parentId || null, icon, id]);
-  } else if (icon !== undefined) {
-    db.run('UPDATE note_items SET content = ?, icon = ? WHERE id = ?', [content || '', icon, id]);
-  } else if (parentId !== undefined) {
-    db.run('UPDATE note_items SET content = ?, parent_id = ? WHERE id = ?', [content || '', parentId || null, id]);
-  } else {
-    db.run('UPDATE note_items SET content = ? WHERE id = ?', [content || '', id]);
-  }
+  if (patch.icon !== undefined) { fields.push('icon = ?'); params.push(patch.icon); }
+  if (!fields.length) return;
+  params.push(id);
+  db.run(`UPDATE note_items SET ${fields.join(', ')} WHERE id = ?`, params);
   save();
 }
 

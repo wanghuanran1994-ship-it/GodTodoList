@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GodTodoList - 事项管理体系</title>
-  <link rel="stylesheet" href="/css/style.css?v=64">
+  <link rel="stylesheet" href="/css/style.css?v=65">
 </head>
 <body>
   <!-- 页面加载过渡：Vue 接管前显示，避免 v-if 弹窗闪烁 -->
@@ -270,7 +270,7 @@
                        :class="{ 'report-active': selectedReport?.id === r.id }">
                     <div class="report-history-meta">
                       <span class="report-history-date">{{ formatDate(r.created_at) }}</span>
-                      <button class="btn btn-xs" @click.stop="deleteReport(r.id)" style="opacity:0.3;font-size:10px">×</button>
+                      <button class="btn btn-xs" @click.stop="deleteReport(r.id)" style="opacity:0.3;font-size:10px" aria-label="删除报告" title="删除报告">×</button>
                     </div>
                   </div>
                   <div v-if="reportHistory.length === 0" class="report-history-empty">
@@ -347,7 +347,7 @@
           <div class="quick-input-main">
             <input type="text" v-model="quickInputText" class="quick-input-field"
                    placeholder="用一句话描述任务，点创建后可用 AI 推理属性..."
-                   @keydown.enter="createFromQuickInput">
+                   @keydown.enter="!$event.isComposing && createFromQuickInput()">
             <button class="btn btn-primary quick-create-btn" @click="createFromQuickInput"
                     :disabled="!quickInputText.trim()">创建</button>
           </div>
@@ -583,7 +583,7 @@
                   <span class="path-name" @click="openFolderFor(p)" :title="p">{{ p.split(/[/\\]/).pop() || p }}</span>
                   <span class="path-full" :title="p">{{ p }}</span>
                   <button class="btn btn-xs" @click="openFolderFor(p)">打开</button>
-                  <button class="btn btn-xs btn-danger" @click="removeGoalPath(stat.id, pi)">×</button>
+                  <button class="btn btn-xs btn-danger" @click="removeGoalPath(stat.id, pi)" aria-label="移除路径" title="移除路径">×</button>
                 </div>
                 <!-- 任务关联的目录 -->
                 <div class="path-item" v-for="f in goalTaskFolders(stat.id)" :key="f.task_id">
@@ -704,7 +704,7 @@
                        class="bubble-input-field"
                        :placeholder="'记录想法到 ' + bubbleInput.categoryKey + '...'"
                        ref="bubbleInputRef"
-                       @keyup.enter="submitBubbleInput"
+                       @keyup.enter="!$event.isComposing && submitBubbleInput()"
                        @keyup.esc="dismissBubbleInput">
                 <span class="bubble-input-hint">Enter 提交 · Esc 取消</span>
               </div>
@@ -729,7 +729,7 @@
                 </span>
                 <input :value="card.title || '未命名'"
                        @blur="renameCard(card.id, $event.target.value)"
-                       @keyup.enter="$event.target.blur()"
+                       @keyup.enter="!$event.isComposing && $event.target.blur()"
                        @input="fitTitleWidth($event.target)"
                        class="note-card-title">
                 <button class="note-card-extract" @click="extractTasksFromNote(card.id)"
@@ -789,7 +789,7 @@
 
               <div class="note-add-row" @paste="handleNotePaste($event, card.id)">
                 <input :id="'new-item-' + card.id" v-model="newItemTexts[card.id]"
-                       @keyup.enter="addItem(card.id); $nextTick(() => document.getElementById('new-item-' + card.id)?.focus())"
+                       @keyup.enter="!$event.isComposing && (addItem(card.id), $nextTick(() => document.getElementById('new-item-' + card.id)?.focus()))"
                        @keydown.tab="handleNoteKeydown($event, card.id)"
                        class="note-add-input"
                        :placeholder="'＋ 添加条目（Tab缩进为子项）'">
@@ -1071,7 +1071,7 @@
             <div style="display:flex;gap:8px">
               <input type="text" v-model="settings.terminal_path" class="input" @blur="saveSettings" placeholder="Mac: Terminal / iTerm / Windows: cmd" style="flex:1">
               <button class="btn btn-sm" @click="pickFileFor('terminal')">📂 选择</button>
-              <button class="btn btn-sm" @click="settings.terminal_path = ''; saveSettings()" v-if="settings.terminal_path">✕</button>
+              <button class="btn btn-sm" @click="settings.terminal_path = ''; saveSettings()" v-if="settings.terminal_path" aria-label="清除" title="清除">✕</button>
             </div>
             <p class="form-hint">选择终端可执行文件，Mac 可选 .app 如 Terminal 或 iTerm，Windows 选 .exe 如 cmd.exe</p>
           </div>
@@ -1080,7 +1080,7 @@
             <div style="display:flex;gap:8px">
               <input type="text" v-model="settings.editor" class="input" @blur="saveSettings" placeholder="短名（Obsidian/VS Code）或完整路径" style="flex:1">
               <button class="btn btn-sm" @click="pickFileFor('editor')">📂 选择</button>
-              <button class="btn btn-sm" @click="settings.editor = ''; saveSettings()" v-if="settings.editor">✕</button>
+              <button class="btn btn-sm" @click="settings.editor = ''; saveSettings()" v-if="settings.editor" aria-label="清除" title="清除">✕</button>
             </div>
             <p class="form-hint">支持短名（obsidian/typora/vscode/code/sublime）或通过「选择」指定可执行文件完整路径，Windows 可选 .exe/.lnk</p>
           </div>
@@ -1100,7 +1100,7 @@
               </div>
               <span class="tag-dimension">{{ tag.dimension === 'urgency' ? '紧迫度' : '价值' }}</span>
               <input type="text" v-model="tag.name" class="input tag-name-input" @blur="updateTag(tag)">
-              <button class="btn-icon btn-danger-icon" @click="removeTag(tag.id)">×</button>
+              <button class="btn-icon btn-danger-icon" @click="removeTag(tag.id)" aria-label="删除标签" title="删除标签">×</button>
             </div>
             <div class="tag-editor-add">
               <div style="position:relative">
@@ -1160,12 +1160,12 @@
 
     <!-- ========== 右侧详情面板 ========== -->
     <div class="modal-overlay" v-if="selectedTask" @click.self="closeDetail">
-      <div class="modal task-detail-modal">
+      <div class="modal task-detail-modal" role="dialog" aria-modal="true" aria-label="任务详情">
         <!-- 顶部：标题（可编辑）+ 关闭 -->
         <div class="task-detail-header">
           <input type="text" v-model="selectedTask.title" class="task-detail-title-input"
                  @blur="saveSelectedTask" placeholder="任务标题">
-          <button class="btn-icon" @click="closeDetail">×</button>
+          <button class="btn-icon" @click="closeDetail" aria-label="关闭" title="关闭">×</button>
         </div>
         <!-- 状态行（固定始终可见） -->
         <div class="task-detail-status">
@@ -1197,7 +1197,7 @@
             <div class="ai-suggestion-card" v-if="aiSuggestions && aiSuggestions._taskId === selectedTask.id">
               <div class="ai-suggestion-header">
                 <span>🤖 AI 建议（可编辑）</span>
-                <button class="btn-icon" @click="dismissAISuggestions">×</button>
+                <button class="btn-icon" @click="dismissAISuggestions" aria-label="关闭" title="关闭">×</button>
               </div>
               <div class="ai-suggestion-body">
                 <div class="ai-suggest-item">
@@ -1247,7 +1247,7 @@
                   <div class="ai-suggest-subtasks">
                     <div class="ai-subtask-row" v-for="(st, si) in aiSuggestions.subtasks" :key="si">
                       <input type="text" v-model="aiSuggestions.subtasks[si]" class="input ai-suggest-input">
-                      <button class="btn-icon btn-danger-icon btn-xs" @click="aiSuggestions.subtasks.splice(si, 1)">×</button>
+                      <button class="btn-icon btn-danger-icon btn-xs" @click="aiSuggestions.subtasks.splice(si, 1)" aria-label="移除建议" title="移除">×</button>
                     </div>
                   </div>
                 </div>
@@ -1318,7 +1318,7 @@
                 </span>
                 <input type="text" v-model="newPerson" class="input inline-input"
                        placeholder="输入人名回车添加"
-                       @keydown.enter="addPerson">
+                       @keydown.enter="!$event.isComposing && addPerson()">
               </div>
             </div>
           </div>
@@ -1363,7 +1363,7 @@
               <div class="time-suggestion-row" v-if="timeSuggestion">
                 <template v-if="timeSuggestion.error">
                   <span class="time-suggestion-error">⚠️ {{ timeSuggestion.error }}</span>
-                  <button class="btn btn-xs" @click="closeTimeSuggestion">×</button>
+                  <button class="btn btn-xs" @click="closeTimeSuggestion" aria-label="关闭" title="关闭">×</button>
                 </template>
                 <template v-else-if="timeSuggestion.suggestion">
                   <span class="time-suggestion-icon">🤖</span>
@@ -1420,7 +1420,7 @@
               </div>
               <div class="subtask-add">
                 <input type="text" v-model="newSubtaskTitle" class="input inline-input"
-                       placeholder="添加子任务..." @keydown.enter="addSubtask">
+                       placeholder="添加子任务..." @keydown.enter="!$event.isComposing && addSubtask()">
                 <button class="btn btn-xs" @click="addSubtask" :disabled="!newSubtaskTitle.trim()">＋</button>
                 <button class="btn btn-xs" @click="aiDecompose" :disabled="aiDecomposing" title="AI 自动分解">
                   🤖 {{ aiDecomposing ? '分解中...' : 'AI分解' }}
@@ -1451,7 +1451,7 @@
                   <span class="att-icon">{{ fileIcon(att.file_type) }}</span>
                   <span class="att-name" @click="openAttachment(att)">{{ att.file_name }}</span>
                   <span class="att-size">{{ formatSize(att.file_size) }}</span>
-                  <button class="btn-icon btn-danger-icon" @click="deleteAttachment(att.id)">×</button>
+                  <button class="btn-icon btn-danger-icon" @click="deleteAttachment(att.id)" aria-label="删除附件" title="删除附件">×</button>
                 </div>
               </div>
               <div class="folder-action" v-if="selectedTask.folder_path || (selectedTask.paths && selectedTask.paths.length)">
@@ -1466,7 +1466,7 @@
               <div style="display:flex;gap:4px">
                 <input type="text" v-model="quickNote" class="input" style="flex:1"
                        placeholder="贴入链接、命令、备忘... 回车追加到 README"
-                       @keyup.enter="appendToReadme">
+                       @keyup.enter="!$event.isComposing && appendToReadme()">
                 <button class="btn btn-xs btn-primary" @click="appendToReadme" :disabled="appendingNote || !quickNote.trim()">
                   {{ appendingNote ? '...' : '追加' }}
                 </button>
@@ -1503,7 +1503,7 @@
                   <button class="btn btn-xs" @click="openFolderFor(p)">打开</button>
                   <button class="btn btn-xs" @click="setPrimaryPath(pi)" title="设为主路径">⭐</button>
                   <button class="btn btn-xs" @click="checkPathReadme(p)" title="检查 README">🔍</button>
-                  <button class="btn btn-xs btn-danger" @click="removeTaskPath(selectedTask.id, pi)">×</button>
+                  <button class="btn btn-xs btn-danger" @click="removeTaskPath(selectedTask.id, pi)" aria-label="移除路径" title="移除路径">×</button>
                 </div>
                 <button class="btn btn-xs" @click="openDirBrowser">＋ 添加路径</button>
               </div>
@@ -1547,10 +1547,10 @@
 
     <!-- 扫描会话弹窗（独立浮层） -->
     <div class="modal-overlay" v-if="showScanModal" @click.self="showScanModal = false">
-      <div class="modal" style="width:480px;max-height:70vh">
+      <div class="modal" style="width:480px;max-height:70vh" role="dialog" aria-modal="true" aria-label="发现 AI 会话">
         <div class="modal-header">
           <h3>发现 AI 会话</h3>
-          <button class="btn-icon" @click="showScanModal = false">×</button>
+          <button class="btn-icon" @click="showScanModal = false" aria-label="关闭" title="关闭">×</button>
         </div>
         <div class="modal-body">
           <div v-if="scanningConversations" style="text-align:center;padding:20px;color:var(--text-3)">扫描中...</div>
@@ -1571,10 +1571,10 @@
 
     <!-- ========== 快速新建任务弹窗 ========== -->
     <div class="modal-overlay" v-if="showQuickAdd" @click.self="showQuickAdd = false">
-      <div class="modal quick-add-modal">
+      <div class="modal quick-add-modal" role="dialog" aria-modal="true" aria-label="快速创建任务">
         <div class="modal-header">
           <h3>新建任务</h3>
-          <button class="btn-icon" @click="showQuickAdd = false">×</button>
+          <button class="btn-icon" @click="showQuickAdd = false" aria-label="关闭" title="关闭">×</button>
         </div>
         <div class="modal-body quick-add-body">
           <!-- 模板工具条 -->
@@ -1609,7 +1609,7 @@
           <div class="form-group" style="grid-column:1/-1">
             <label><i class="label-icon">📌</i>任务名称</label>
             <input type="text" v-model="newTask.title" class="input input-lg"
-                   placeholder="AI推理后自动填充，也可手动输入" @keydown.enter="quickCreateTask">
+                   placeholder="AI推理后自动填充，也可手动输入" @keydown.enter="!$event.isComposing && quickCreateTask()">
           </div>
           <!-- 左列 -->
           <div>
@@ -1680,7 +1680,7 @@
                    @dragend="onSubtaskDragEnd">
                 <span class="subtask-handle" title="拖动排序">⠿</span>
                 <input type="text" v-model="newTask.subtasks[si]" class="input subtask-input"
-                       placeholder="子任务内容" @keydown.enter.prevent="addSubtaskAt(si)">
+                       placeholder="子任务内容" @keydown.enter.prevent="!$event.isComposing && addSubtaskAt(si)">
                 <button class="btn-icon btn-xs subtask-del" @click="newTask.subtasks.splice(si, 1)" title="删除">×</button>
               </div>
               <button type="button" class="btn btn-xs subtask-add-btn" @click="newTask.subtasks.push('')">＋ 添加子任务</button>
@@ -1708,10 +1708,10 @@
 
     <!-- ========== 新建目标弹窗 ========== -->
     <div class="modal-overlay" v-if="showGoalModal" @click.self="showGoalModal = false">
-      <div class="modal">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="目标">
         <div class="modal-header">
           <h3>{{ editingGoal ? '编辑目标' : '新建目标' }}</h3>
-          <button class="btn-icon" @click="showGoalModal = false">×</button>
+          <button class="btn-icon" @click="showGoalModal = false" aria-label="关闭" title="关闭">×</button>
         </div>
         <div class="modal-body">
           <div class="form-group">
@@ -1736,10 +1736,10 @@
 
     <!-- ========== 新建惯例弹窗 ========== -->
     <div class="modal-overlay" v-if="showRoutineModal" @click.self="showRoutineModal = false">
-      <div class="modal">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="惯例">
         <div class="modal-header">
           <h3>{{ editingRoutine ? '编辑惯例' : '新建惯例' }}</h3>
-          <button class="btn-icon" @click="showRoutineModal = false">×</button>
+          <button class="btn-icon" @click="showRoutineModal = false" aria-label="关闭" title="关闭">×</button>
         </div>
         <div class="modal-body">
           <div class="form-group">
@@ -1791,10 +1791,10 @@
 
     <!-- ========== 批量导入弹窗 ========== -->
     <div class="modal-overlay" v-if="showImportModal" @click.self="showImportModal = false">
-      <div class="modal import-modal">
+      <div class="modal import-modal" role="dialog" aria-modal="true" aria-label="批量导入">
         <div class="modal-header">
           <h3>📥 批量导入任务</h3>
-          <button class="btn-icon" @click="showImportModal = false">×</button>
+          <button class="btn-icon" @click="showImportModal = false" aria-label="关闭" title="关闭">×</button>
         </div>
         <div class="modal-body">
           <p class="form-hint" style="margin-bottom:12px">扫描指定目录下的子文件夹，自动识别 README.md 中的任务信息并导入。没有 README 的目录也会被识别（用目录名作为任务标题）。</p>
@@ -1842,10 +1842,10 @@
 
     <!-- ========== 保存任务模板 ========== -->
     <div class="modal-overlay" v-if="showTemplateSaveModal" @click.self="showTemplateSaveModal = false">
-      <div class="modal" style="width: 420px; max-width: 92vw">
+      <div class="modal" style="width: 420px; max-width: 92vw" role="dialog" aria-modal="true" aria-label="保存为模板">
         <div class="modal-header">
           <h3>💾 保存为模板</h3>
-          <button class="btn-icon" @click="showTemplateSaveModal = false">×</button>
+          <button class="btn-icon" @click="showTemplateSaveModal = false" aria-label="关闭" title="关闭">×</button>
         </div>
         <div class="modal-body">
           <div class="form-group">
@@ -1867,7 +1867,7 @@
 
     <!-- ========== AI 从笔记提取任务 ========== -->
     <div class="modal-overlay" v-if="showExtractModal" @click.self="closeExtractModal">
-      <div class="modal extract-modal">
+      <div class="modal extract-modal" role="dialog" aria-modal="true" aria-label="AI 提取建议">
         <div class="modal-header">
           <h3>🎯 AI 提取任务建议</h3>
           <button class="modal-close" @click="closeExtractModal">×</button>
@@ -1912,7 +1912,7 @@
           <input ref="commandInputRef" v-model="commandQuery"
                  @keydown.up.prevent="commandMove(-1)"
                  @keydown.down.prevent="commandMove(1)"
-                 @keydown.enter.prevent="executeCommand(commandResults[selectedCommandIdx])"
+                 @keydown.enter.prevent="!$event.isComposing && executeCommand(commandResults[selectedCommandIdx])"
                  @keydown.esc.prevent="closeCommandPalette()"
                  placeholder="搜索任务、目标、惯例或操作..."
                  autocomplete="off" spellcheck="false"
@@ -1960,7 +1960,7 @@
         <div class="ai-chat-header-actions">
           <button v-if="pressureChatMode" class="btn btn-xs btn-primary" @click="savePressureAnalysis" title="保存结论到压力面板">💾 保存结论</button>
           <button class="btn-icon" @click="clearAIChat" title="清空对话">🗑️</button>
-          <button class="btn-icon" @click="closeAIChat">×</button>
+          <button class="btn-icon" @click="closeAIChat" aria-label="关闭" title="关闭">×</button>
         </div>
       </div>
       <div class="ai-chat-messages" ref="aiChatMessages">
@@ -1987,7 +1987,7 @@
         </div>
         <div class="ai-input-row">
           <textarea v-model="aiInput" class="ai-input" placeholder="问我任何关于任务和目标的问题..."
-                    @keydown.enter.exact.prevent="sendAIMessage" rows="1"></textarea>
+                    @keydown.enter.exact.prevent="!$event.isComposing && sendAIMessage()" rows="1"></textarea>
           <button class="btn btn-primary ai-send-btn" @click="sendAIMessage" :disabled="aiStreaming || !aiInput.trim()">
             发送
           </button>
@@ -2008,11 +2008,19 @@
         </div>
       </div>
     </div>
+
+    <!-- 全局 toast：API 失败时用户可见反馈 -->
+    <transition name="toast-fade">
+      <div v-if="toast.show" class="toast" :class="toast.type" role="alert" aria-live="assertive">
+        <span class="toast-icon">{{ toast.type === 'error' ? '⚠' : (toast.type === 'success' ? '✓' : 'ℹ') }}</span>
+        <span class="toast-msg">{{ toast.message }}</span>
+      </div>
+    </transition>
   </div>
 
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
-  <script src="/js/app.js?v=88"></script>
+  <script src="/js/app.js?v=93"></script>
 </body>
 </html>

@@ -172,7 +172,7 @@ createApp({
       await api(`/api/tasks/${taskId}`, { method: 'PUT', body });
       await loadTasks();
       if (selectedTask.value?.id === taskId) {
-        selectedTask.value = await api(`/api/tasks/${taskId}`);
+        await refreshSelectedTask();
       }
     }
 
@@ -197,7 +197,7 @@ createApp({
       }
       await loadTasks();
       if (selectedTask.value?.id === taskId) {
-        selectedTask.value = await api(`/api/tasks/${taskId}`);
+        await refreshSelectedTask();
       }
     }
 
@@ -285,9 +285,10 @@ createApp({
       item.icon = icon;
       noteItemIconPicker.value = null;
       try {
-        await api(`/api/note-items/${item.id}`, { method: 'PUT', body: { icon } });
+        await api(`/api/note-items/${item.id}`, { method: 'PUT', body: { icon }, silent: true });
       } catch (e) {
         item.icon = oldIcon;
+        showToast('图标修改失败：' + e.message);
       }
     }
     async function clearItemIcon(item) {
@@ -295,9 +296,10 @@ createApp({
       item.icon = null;
       noteItemIconPicker.value = null;
       try {
-        await api(`/api/note-items/${item.id}`, { method: 'PUT', body: { icon: null } });
+        await api(`/api/note-items/${item.id}`, { method: 'PUT', body: { icon: null }, silent: true });
       } catch (e) {
         item.icon = prev;
+        showToast('清除图标失败：' + e.message);
       }
     }
 
@@ -781,6 +783,18 @@ createApp({
     // ==================== API 工具 ====================
     const lastApiError = ref('');
 
+    // 全局 toast：API 失败时给用户可见反馈（之前 lastApiError 设了但模板没读，等于哑火）
+    const toast = reactive({ show: false, message: '', type: 'error' });
+    let toastTimer = null;
+    function showToast(message, type = 'error', duration = 3000) {
+      // 截断过长消息，避免浮窗撑爆屏幕
+      toast.message = String(message || '未知错误').slice(0, 200);
+      toast.type = type;
+      toast.show = true;
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toast.show = false; }, duration);
+    }
+
     async function api(url, options = {}) {
       lastApiError.value = '';
       try {
@@ -796,6 +810,8 @@ createApp({
         return res.json();
       } catch (e) {
         lastApiError.value = e.message;
+        // 静默模式（如 setItemIcon 已自己 rollback + 反馈）：调用方传 options.silent = true 跳过 toast
+        if (!options.silent) showToast(e.message || '请求失败', 'error');
         throw e;
       }
     }
@@ -2272,7 +2288,7 @@ createApp({
             method: 'POST', body: { title }
           });
         }
-        selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+        await refreshSelectedTask();
       }
 
       // 保存复用目录路径，在清除前取出
@@ -2285,8 +2301,8 @@ createApp({
         await api(`/api/tasks/${selectedTask.value.id}`, {
           method: 'PUT', body: { folder_path: reusePath }
         });
+        selectedTask.value.folder_path = reusePath; // ⚠️ 本地 patch，避免 selectTask 重新 GET 覆盖刚改的 title/description
         await loadTasks();
-        selectTask(selectedTask.value.id);
       } else if (folderName) {
         await createFolderWithName(selectedTask.value.id, folderName);
       }
@@ -2308,12 +2324,14 @@ createApp({
     async function createFolderWithName(taskId, folderName) {
       const task = await api(`/api/tasks/${taskId}`);
       if (task && !task.folder_path && folderName.trim()) {
-        await api(`/api/tasks/${taskId}/create-folder`, {
+        const r = await api(`/api/tasks/${taskId}/create-folder`, {
           method: 'POST',
           body: { folder_name: folderName.trim() }
         });
+        if (selectedTask.value && selectedTask.value.id === taskId && r && r.folder_path) {
+          selectedTask.value.folder_path = r.folder_path; // ⚠️ 本地 patch，避免 selectTask 重新 GET 覆盖刚改字段
+        }
         await loadTasks();
-        selectTask(taskId);
       }
     }
 
@@ -2545,6 +2563,24 @@ createApp({
     function switchDetailTab(name) { activeDetailTab.value = name; }
 
     let selectTaskRequestId = 0;
+    // ⚠️ 详情页操作后「重新 GET 同一任务」时，保留本地编辑字段，避免 input @blur 触发的
+    // saveSelectedTask PUT 还在飞行中时，新 GET 返回旧 title/description 把本地覆盖。
+    // 不保留 status/tags/paths/folder_path 等，因为这些字段正是被各类操作改变的，需要服务器最新值。
+    const LOCAL_EDITED_TASK_FIELDS = ['title', 'description', 'context', 'due_date', 'estimated_time', 'actual_time', 'people_str', 'report_meeting'];
+    async function refreshSelectedTask() {
+      if (!selectedTask.value) return;
+      const id = selectedTask.value.id;
+      const reqId = ++selectTaskRequestId;
+      try {
+        const task = await api(`/api/tasks/${id}`);
+        if (reqId !== selectTaskRequestId) return;
+        // 把本地编辑字段 merge 回服务器返回值
+        for (const k of LOCAL_EDITED_TASK_FIELDS) {
+          if (selectedTask.value[k] !== undefined) task[k] = selectedTask.value[k];
+        }
+        selectedTask.value = task;
+      } catch (e) { /* 忽略，保留旧 selectedTask */ }
+    }
     async function selectTask(id) {
       selectedTaskId.value = id;
       const reqId = ++selectTaskRequestId;
@@ -2552,6 +2588,12 @@ createApp({
         const task = await api(`/api/tasks/${id}`);
         // 确保没有更新的请求覆盖
         if (reqId !== selectTaskRequestId) return;
+        // 切换到不同任务时不保留本地字段；同一任务重新 GET（详情页内操作触发）保留本地编辑字段
+        if (selectedTask.value && selectedTask.value.id === id) {
+          for (const k of LOCAL_EDITED_TASK_FIELDS) {
+            if (selectedTask.value[k] !== undefined) task[k] = selectedTask.value[k];
+          }
+        }
         selectedTask.value = task;
         activeDetailTab.value = 'basic';   // 每次打开默认「基本」tab
         loadTaskConversations(id);
@@ -2626,7 +2668,7 @@ createApp({
         method: 'PUT',
         body: { tag_ids: current }
       });
-      selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+      await refreshSelectedTask();
       await loadTasks();
     }
 
@@ -2667,7 +2709,7 @@ createApp({
         body: { people }
       });
       newPerson.value = '';
-      selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+      await refreshSelectedTask();
     }
 
     async function removePerson(index) {
@@ -2677,7 +2719,7 @@ createApp({
         method: 'PUT',
         body: { people }
       });
-      selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+      await refreshSelectedTask();
     }
 
     // ==================== 时间记录 ====================
@@ -2695,7 +2737,7 @@ createApp({
       });
       timeLogDuration.value = null;
       timeLogNote.value = '';
-      selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+      await refreshSelectedTask();
     }
 
     // ==================== AI 时间估算校准 ====================
@@ -2758,7 +2800,7 @@ createApp({
         await res.json();
 
         // 重新加载任务详情
-        selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+        await refreshSelectedTask();
         await loadTasks();
       } catch (e) {
         console.error('上传失败:', e);
@@ -2780,7 +2822,7 @@ createApp({
 
     async function deleteAttachment(attId) {
       await api(`/api/attachments/${attId}`, { method: 'DELETE' });
-      selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+      await refreshSelectedTask();
     }
 
     async function openAttachment(att) {
@@ -2857,7 +2899,10 @@ createApp({
     }
     async function updateCardCategory(cardId, category) {
       await api(`/api/note-cards/${cardId}`, { method: 'PUT', body: { category } });
-      await loadNoteCards();
+      // ⚠️ 只本地更新 category，不调 loadNoteCards()，否则会整片覆盖 noteCards.value，
+      // 把并发 renameCard 的标题 PUT（blur 触发）刚改的本地状态冲掉 → 标题丢失
+      const card = noteCards.value.find(c => c.id === cardId);
+      if (card) card.category = category;
     }
     function cycleCardCategory(card) {
       const cur = card.category || '随手记';
@@ -2991,14 +3036,25 @@ createApp({
       if (toIdx < 0) return;
       if (after) toIdx++;
       items.splice(toIdx, 0, moved);
+      card.items = items; // ⚠️ 写回本地，避免 loadNoteCards 全量刷新冲掉并发 renameCard
       const updates = items.map((it, i) => ({ id: it.id, sort_order: i }));
       await api('/api/note-items/reorder', { method: 'PUT', body: { items: updates } });
-      await loadNoteCards();
     }
     async function updateItem(itemId, content, icon) {
-      const body = { content: content || '' };
+      // ⚠️ 字段级 patch：只传明确出现的字段，避免 undefined 被转空串冲掉现有值
+      const body = {};
+      if (content !== undefined) body.content = content;
       if (icon !== undefined) body.icon = icon;
       await api(`/api/note-items/${itemId}`, { method: 'PUT', body });
+      // 本地 patch，避免 saveEditItem 再调 loadNoteCards 全量刷新（会和并发 renameCard 竞态丢标题）
+      for (const c of noteCards.value) {
+        const it = c.items.find(x => x.id === itemId);
+        if (it) {
+          if (content !== undefined) it.content = content || '';
+          if (icon !== undefined) it.icon = icon;
+          break;
+        }
+      }
     }
     async function deleteItem(cardId, itemId) {
       await api(`/api/note-items/${itemId}`, { method: 'DELETE' });
@@ -3066,22 +3122,27 @@ createApp({
         .replace(/>/g, '&gt;');
 
       // 图片 ![](url)
-      html = html.replace(/!\[([^\]]*)\]\((\/uploads\/[^\s)]+)\)/g, (_, alt, url) =>
-        `<img src="${url}" alt="${alt}" class="nc-img" loading="lazy" onclick="window.open('${url}')">`);
+      // HTML 属性完整转义（& " < >）— 提前定义，供后续 img/URL/path 还原使用
+      const escAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-      // 还原 URL
+      // ⚠️ 图片还原：alt 必须 escape，否则 ![alt"onerror="alert(1)](/uploads/x) 会注入 onerror
+      html = html.replace(/!\[([^\]]*)\]\((\/uploads\/[^\s)]+)\)/g, (_, alt, url) => {
+        const eAlt = escAttr(alt);
+        const eUrl = escAttr(url);
+        return `<img src="${eUrl}" alt="${eAlt}" class="nc-img" loading="lazy" onclick="window.open('${eUrl}')">`;
+      });
+
+      // 还原 URL — href/title 都要 escape，防 & 等字符破坏 HTML 结构
       urlPlaceholders.forEach((url, idx) => {
+        const eUrl = escAttr(url);
         html = html.replace('\x00URL' + idx + '\x00',
-          `<a href="${url}" target="_blank" rel="noopener" class="nc-link" title="点击打开: ${url}">${url}</a>`);
+          `<a href="${eUrl}" target="_blank" rel="noopener" class="nc-link" title="点击打开: ${eUrl}">${eUrl}</a>`);
       });
 
       // 还原表格
       tablePlaceholders.forEach((tableHtml, idx) => {
         html = html.replace('\x00TABLE' + idx + '\x00', tableHtml);
       });
-
-      // HTML 属性完整转义（& " < >）
-      const escAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
       // 还原路径
       pathPlaceholders.forEach((p, idx) => {
@@ -3123,14 +3184,16 @@ createApp({
     function markdownTableToHtml(lines) {
       // lines[0] = header, lines[1] = separator, lines[2..] = body
       const parseRow = (line) => line.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      // ⚠️ cell 内容必须转义：用户写 |<script>alert(1)</script>| 会注入
+      const escCell = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
       const header = parseRow(lines[0]);
       const body = lines.slice(2).map(parseRow);
       let table = '<table class="nc-table"><thead><tr>';
-      header.forEach(h => { table += `<th>${h}</th>`; });
+      header.forEach(h => { table += `<th>${escCell(h)}</th>`; });
       table += '</tr></thead><tbody>';
       body.forEach(row => {
         table += '<tr>';
-        row.forEach(cell => { table += `<td>${cell}</td>`; });
+        row.forEach(cell => { table += `<td>${escCell(cell)}</td>`; });
         table += '</tr>';
       });
       table += '</tbody></table>';
@@ -3161,7 +3224,7 @@ createApp({
       editingItemId.value = null;
       if (newContent !== undefined) {
         await updateItem(itemId, newContent.trim() || '');
-        await loadNoteCards();
+        // updateItem 已本地 patch，不再 loadNoteCards，避免和并发 renameCard 竞态
       }
     }
     function cancelEditItem() {
@@ -3273,7 +3336,7 @@ createApp({
       if (!confirm('确定要取消此任务的目录关联吗？（不会删除实际目录）')) return;
       await api(`/api/tasks/${selectedTask.value.id}/unlink-folder`, { method: 'POST' });
       await loadTasks();
-      selectTask(selectedTask.value.id);
+      await refreshSelectedTask();
     }
 
     // ==================== 目标操作 ====================
@@ -3809,6 +3872,19 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       nextTick(() => { if (typeof action === 'function') action(); });
     }
 
+    // ==================== 全局事件 handler（命名以便 onUnmounted removeEventListener）====================
+    function onVisibilityChange() {
+      if (document.visibilityState === 'hidden') saveCardSizesFromDOM();
+    }
+    function onGlobalClick(e) {
+      if (!e.target.closest('.emoji-pick-btn') && !e.target.closest('.emoji-grid')) {
+        emojiPickerFor.value = null;
+      }
+      if (!e.target.closest('.note-item-icon-btn') && !e.target.closest('.note-item-icon-grid')) {
+        noteItemIconPicker.value = null;
+      }
+    }
+
     // ==================== 键盘快捷键 ====================
     function handleKeydown(e) {
       // ⌘K / Ctrl+K 唤起命令面板（中文输入法下 e.key 可能是 'Process'，用 e.code 兜底）
@@ -3818,12 +3894,16 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         else openCommandPalette();
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN')) {
         e.preventDefault();
         openQuickAdd();
       }
       if (e.key === 'Escape') {
         if (showCommandPalette.value) closeCommandPalette();
+        else if (showExtractModal.value) closeExtractModal();
+        else if (showScanModal.value) showScanModal.value = false;
+        else if (showTemplateSaveModal.value) showTemplateSaveModal.value = false;
+        else if (showImportModal.value) showImportModal.value = false;
         else if (showQuickAdd.value) showQuickAdd.value = false;
         else if (showGoalModal.value) showGoalModal.value = false;
         else if (showRoutineModal.value) showRoutineModal.value = false;
@@ -3937,7 +4017,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       const paths = [...(task.paths || []), pathStr];
       await api(`/api/tasks/${taskId}`, { method: 'PUT', body: { paths } });
       if (selectedTask.value?.id === taskId) {
-        selectedTask.value = await api(`/api/tasks/${taskId}`);
+        await refreshSelectedTask();
       }
       await loadTasks();
     }
@@ -3947,7 +4027,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       const paths = (task.paths || []).filter((_, i) => i !== index);
       await api(`/api/tasks/${taskId}`, { method: 'PUT', body: { paths } });
       if (selectedTask.value?.id === taskId) {
-        selectedTask.value = await api(`/api/tasks/${taskId}`);
+        await refreshSelectedTask();
         checkAllPathReadmes();
       }
       await loadTasks();
@@ -3973,7 +4053,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       const [moved] = paths.splice(from, 1);
       paths.splice(index, 0, moved);
       await api(`/api/tasks/${task.id}`, { method: 'PUT', body: { paths } });
-      selectedTask.value = await api(`/api/tasks/${task.id}`);
+      await refreshSelectedTask();
     }
 
     // 设为主路径
@@ -3987,7 +4067,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         paths.unshift(oldPrimary);
       }
       await api(`/api/tasks/${task.id}`, { method: 'PUT', body: { folder_path: newPrimary, paths } });
-      selectedTask.value = await api(`/api/tasks/${task.id}`);
+      await refreshSelectedTask();
       checkAllPathReadmes();
     }
 
@@ -4316,14 +4396,14 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       await api(`/api/tasks/${taskId}/timer/start`, { method: 'POST' });
       await refreshTimers();
       await loadTasks();
-      if (selectedTask.value?.id === taskId) selectedTask.value = await api(`/api/tasks/${taskId}`);
+      if (selectedTask.value?.id === taskId) await refreshSelectedTask();
     }
 
     async function stopTaskTimer(taskId) {
       const result = await api(`/api/tasks/${taskId}/timer/stop`, { method: 'POST' });
       await refreshTimers();
       await loadTasks();
-      if (selectedTask.value?.id === taskId) selectedTask.value = await api(`/api/tasks/${taskId}`);
+      if (selectedTask.value?.id === taskId) await refreshSelectedTask();
       return result.minutes;
     }
 
@@ -4396,19 +4476,10 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         });
       });
       window.addEventListener('beforeunload', saveCardSizesFromDOM);
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'hidden') saveCardSizesFromDOM();
-      });
+      // ⚠️ 命名函数：onUnmounted 才能正确 removeEventListener，匿名函数会泄漏
+      document.addEventListener('visibilitychange', onVisibilityChange);
       document.addEventListener('keydown', handleKeydown);
-      document.addEventListener('click', (e) => {
-        if (!e.target.closest('.emoji-pick-btn') && !e.target.closest('.emoji-grid')) {
-          emojiPickerFor.value = null;
-        }
-        // 关闭笔记条目图标选择器
-        if (!e.target.closest('.note-item-icon-btn') && !e.target.closest('.note-item-icon-grid')) {
-          noteItemIconPicker.value = null;
-        }
-      });
+      document.addEventListener('click', onGlobalClick);
       await loadAll();
       timerInterval = setInterval(() => {
         if (activeTimers.value.length > 0) refreshTimers();
@@ -4444,6 +4515,9 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       if (aiProgressTimer) { clearInterval(aiProgressTimer); aiProgressTimer = null; }
       window.removeEventListener('resize', onWindowResize);
       window.removeEventListener('beforeunload', saveCardSizesFromDOM);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      document.removeEventListener('keydown', handleKeydown);
+      document.removeEventListener('click', onGlobalClick);
     });
 
     // ==================== 今日必做 ====================
@@ -4451,7 +4525,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
     async function toggleToday(taskId) {
       await api(`/api/tasks/${taskId}/toggle-today`, { method: 'POST' });
       await loadTasks();
-      if (selectedTask.value?.id === taskId) selectedTask.value = await api(`/api/tasks/${taskId}`);
+      if (selectedTask.value?.id === taskId) await refreshSelectedTask();
     }
 
     async function analyzeTaskProgress(taskId) {
@@ -4462,7 +4536,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         expandedProgress.value[taskId] = true;
         await loadTasks();
         if (selectedTask.value?.id === taskId) {
-          selectedTask.value = await api(`/api/tasks/${taskId}`);
+          await refreshSelectedTask();
         }
       } catch (e) {
         // auto-triggered, fail silently
@@ -4563,7 +4637,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         body: { title: newSubtaskTitle.value.trim() }
       });
       newSubtaskTitle.value = '';
-      selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+      await refreshSelectedTask();
     }
 
     async function toggleSubtask(subtask) {
@@ -4572,7 +4646,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
           method: 'PUT',
           body: { status: subtask.status === 'done' ? 'todo' : 'done' }
         });
-        selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+        await refreshSelectedTask();
       } catch (e) {
         // 依赖未完成等错误
         alert(e.message || '无法完成，请先完成依赖项');
@@ -4600,7 +4674,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
           body: { depends_on: tempSubtaskDep.value || null }
         });
         editingSubtaskDep.value = null;
-        selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+        await refreshSelectedTask();
       } catch (e) {
         alert(e.message);
       }
@@ -4621,7 +4695,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
 
     async function deleteSubtask(id) {
       await api(`/api/subtasks/${id}`, { method: 'DELETE' });
-      selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+      await refreshSelectedTask();
     }
 
     async function aiDecompose() {
@@ -4642,7 +4716,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
             body: { title }
           });
         }
-        selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+        await refreshSelectedTask();
       } catch (e) {
         alert('AI 分解失败: ' + e.message);
       }
@@ -4740,6 +4814,7 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       goals, routines, tasks, tags, settings,
       filterStatus, filterGoalId, filterTagIds, filterToday, searchQuery,
       selectedTaskId, selectedTask, analyzingTaskId,
+      toast, showToast,
       showQuickAdd, showGoalModal, showRoutineModal, showTimeLog, timeEditing, showImportModal,
       showCommandPalette, commandQuery, selectedCommandIdx, commandInputRef, commandResults,
       openCommandPalette, closeCommandPalette, commandMove, executeCommand,

@@ -5382,3 +5382,32 @@ body.dark .briefing-stat {
   font-family: inherit;
   max-width: 180px;
 }
+
+/* ============================================
+   全局 Toast — API 失败/成功反馈
+   ============================================ */
+.toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
+  z-index: 10000;
+  max-width: 90vw;
+  font-size: var(--text-sm);
+  color: #ffffff;
+  pointer-events: none;
+  font-weight: 500;
+}
+.toast.error { background: linear-gradient(135deg, #dc2626, #b91c1c); }
+.toast.success { background: linear-gradient(135deg, #16a34a, #15803d); }
+.toast.info { background: linear-gradient(135deg, #2563eb, #1d4ed8); }
+.toast-icon { font-size: 18px; line-height: 1; flex-shrink: 0; }
+.toast-msg { flex: 1; word-break: break-word; line-height: 1.4; }
+.toast-fade-enter-active, .toast-fade-leave-active { transition: opacity 0.25s ease, transform 0.25s ease; }
+.toast-fade-enter-from, .toast-fade-leave-to { opacity: 0; transform: translate(-50%, -16px); }
