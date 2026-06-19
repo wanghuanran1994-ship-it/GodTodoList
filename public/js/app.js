@@ -813,7 +813,8 @@ createApp({
       const filters = {};
       if (filterStatus.value) filters.status = filterStatus.value;
       if (filterGoalId.value) filters.goal_id = filterGoalId.value;
-      if (filterTagIds.value.length === 1) filters.tag_id = filterTagIds.value[0];
+      // 多标签 OR 筛选传给后端预过滤（前端 filteredTasks 兜底）
+      if (filterTagIds.value.length > 0) filters.tag_ids = filterTagIds.value.join(',');
       if (searchQuery.value) filters.search = searchQuery.value;
       if (filterReportOnly.value) filters.is_report = 1;
       tasks.value = await api('/api/tasks?' + new URLSearchParams(filters).toString());
@@ -838,8 +839,184 @@ createApp({
     }
 
     async function loadAll() {
-      await Promise.all([loadGoals(), loadRoutines(), loadTasks(), loadTags(), loadSettings(), loadContacts(), loadNoteCards(), refreshTimers()]);
+      await Promise.all([loadGoals(), loadRoutines(), loadTasks(), loadTags(), loadSettings(), loadContacts(), loadNoteCards(), refreshTimers(), loadTimeHeatmap(), loadTemplates()]);
       loadNoteConversations();
+    }
+
+    // ==================== 时间热力图 ====================
+    const heatmapData = ref([]);
+
+    async function loadTimeHeatmap() {
+      try {
+        heatmapData.value = await api('/api/time-heatmap');
+      } catch (e) {
+        heatmapData.value = [];
+      }
+    }
+
+    // ==================== 每日简报（AI 增强） ====================
+    const briefing = ref(null);
+    const briefingLoading = ref(false);
+
+    async function loadBriefing(force = false) {
+      const today = new Date().toISOString().slice(0, 10);
+      const lastDate = localStorage.getItem('lastBriefingDate');
+      const cachedAI = localStorage.getItem('lastBriefingAI');
+      // 今天还没生成过 AI → 自动 force；或用户主动刷新 → force
+      const needAI = force || lastDate !== today || !cachedAI;
+      briefingLoading.value = true;
+      try {
+        const data = await api('/api/daily-briefing?force=' + (needAI ? '1' : '0'));
+        if (data.aiBriefing) {
+          localStorage.setItem('lastBriefingAI', data.aiBriefing);
+          localStorage.setItem('lastBriefingDate', today);
+        } else if (cachedAI && lastDate === today) {
+          data.aiBriefing = cachedAI;
+        }
+        briefing.value = data;
+      } catch (e) {
+        // 静默失败
+      } finally {
+        briefingLoading.value = false;
+      }
+    }
+
+    // ==================== 任务模板 ====================
+    const templates = ref([]);
+    const showTemplateSaveModal = ref(false);
+    const newTemplateName = ref('');
+    const newTemplateIcon = ref('📦');
+
+    async function loadTemplates() {
+      try {
+        templates.value = await api('/api/templates');
+      } catch (e) {
+        templates.value = [];
+      }
+    }
+
+    function applyTemplate(id) {
+      if (!id) return;
+      const t = templates.value.find(x => x.id === parseInt(id, 10));
+      if (!t || !t.data) return;
+      // 应用模板字段到 newTask（保留 title 让用户填写）
+      const d = t.data;
+      Object.assign(newTask, {
+        description: d.description || '',
+        goal_id: d.goal_id || null,
+        routine_id: d.routine_id || null,
+        tag_ids: [...(d.tag_ids || [])],
+        due_date: d.due_date || '',
+        estimated_time: d.estimated_time || 0,
+        people_str: d.people_str || '',
+        context: d.context || '',
+        is_report: !!d.is_report,
+        report_meeting: d.report_meeting || '',
+        is_today: !!d.is_today,
+        create_folder: d.create_folder !== false,
+      });
+    }
+
+    function openSaveTemplateModal() {
+      newTemplateName.value = '';
+      newTemplateIcon.value = '📦';
+      showTemplateSaveModal.value = true;
+    }
+
+    async function saveCurrentAsTemplate() {
+      const name = newTemplateName.value.trim();
+      if (!name) {
+        alert('请输入模板名称');
+        return;
+      }
+      const data = {
+        description: newTask.description || '',
+        goal_id: newTask.goal_id || null,
+        routine_id: newTask.routine_id || null,
+        tag_ids: [...(newTask.tag_ids || [])],
+        due_date: newTask.due_date || '',
+        estimated_time: newTask.estimated_time || 0,
+        people_str: newTask.people_str || '',
+        context: newTask.context || '',
+        is_report: !!newTask.is_report,
+        report_meeting: newTask.report_meeting || '',
+        is_today: !!newTask.is_today,
+        create_folder: newTask.create_folder !== false,
+      };
+      try {
+        await api('/api/templates', {
+          method: 'POST',
+          body: { name, icon: newTemplateIcon.value || '📦', data }
+        });
+        await loadTemplates();
+        showTemplateSaveModal.value = false;
+      } catch (e) {
+        alert('保存失败：' + e.message);
+      }
+    }
+
+    async function deleteTemplate(id) {
+      if (!confirm('确定删除此模板？')) return;
+      await api(`/api/templates/${id}`, { method: 'DELETE' });
+      await loadTemplates();
+    }
+
+    // 分钟 → 等级（固定阈值，避免被峰值拉平）
+    function heatmapLevel(minutes) {
+      if (!minutes || minutes <= 0) return 0;
+      if (minutes <= 60) return 1;       // < 1h
+      if (minutes <= 180) return 2;      // 1-3h
+      if (minutes <= 360) return 3;      // 3-6h
+      return 4;                          // > 6h
+    }
+
+    // 构建 53 周 × 7 天的网格（周一为每周第一天）
+    const heatmapGrid = computed(() => {
+      const map = new Map();
+      let totalMinutes = 0;
+      for (const item of heatmapData.value) {
+        map.set(item.date, item.minutes || 0);
+        totalMinutes += item.minutes || 0;
+      }
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      // 0=Sun → 6, 1=Mon → 0, ..., 6=Sat → 5
+      const todayRow = today.getDay() === 0 ? 6 : today.getDay() - 1;
+      // 起点：往前推到 364 天前的同一行（保证对齐周列）
+      const start = new Date(today);
+      start.setDate(start.getDate() - 364 - todayRow);
+
+      const weeks = [];
+      for (let w = 0; w < 53; w++) {
+        const week = [];
+        for (let d = 0; d < 7; d++) {
+          const date = new Date(start);
+          date.setDate(date.getDate() + w * 7 + d);
+          const y = date.getFullYear();
+          const m = String(date.getMonth() + 1).padStart(2, '0');
+          const day = String(date.getDate()).padStart(2, '0');
+          const dateStr = `${y}-${m}-${day}`;
+          const minutes = map.get(dateStr) || 0;
+          const isFuture = date > today;
+          week.push({
+            date: dateStr,
+            minutes,
+            level: heatmapLevel(minutes),
+            isFuture,
+          });
+        }
+        weeks.push(week);
+      }
+      return { weeks, totalMinutes };
+    });
+
+    function formatMinutes(min) {
+      if (!min) return '0 分钟';
+      if (min < 60) return `${min} 分钟`;
+      const h = Math.floor(min / 60);
+      const m = min % 60;
+      return m ? `${h} 小时 ${m} 分` : `${h} 小时`;
     }
 
     // ==================== 视图切换 ====================
@@ -854,7 +1031,7 @@ createApp({
       currentView.value = view;
       if (view !== 'kanban') closeDetail();
       if (view === 'goals') loadGoalStats();
-      if (view === 'dashboard') { loadReview(); loadReports(); }
+      if (view === 'dashboard') { loadReview(); loadReports(); loadBriefing(); }
       if (view === 'notes') loadNoteCards();
       if (view === 'reports') view = 'routines';
       if (view === 'routines') loadReportMeetings();
@@ -2521,6 +2698,35 @@ createApp({
       selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
     }
 
+    // ==================== AI 时间估算校准 ====================
+    const timeSuggestion = ref(null); // { suggestion, calibration, error }
+    const timeSuggesting = ref(false);
+
+    async function suggestTime() {
+      if (!selectedTask.value || timeSuggesting.value) return;
+      timeSuggesting.value = true;
+      timeSuggestion.value = null;
+      try {
+        const data = await api(`/api/tasks/${selectedTask.value.id}/suggest-time`, { method: 'POST' });
+        timeSuggestion.value = data;
+      } catch (e) {
+        timeSuggestion.value = { error: e.message };
+      } finally {
+        timeSuggesting.value = false;
+      }
+    }
+
+    async function acceptTimeSuggestion() {
+      if (!timeSuggestion.value || !timeSuggestion.value.suggestion) return;
+      selectedTask.value.estimated_time = timeSuggestion.value.suggestion;
+      await saveSelectedTask();
+      timeSuggestion.value = null;
+    }
+
+    function closeTimeSuggestion() {
+      timeSuggestion.value = null;
+    }
+
     // ==================== 文件操作 ====================
     function triggerFileInput() {
       const el = document.querySelector('.drop-zone input[type="file"]');
@@ -3468,14 +3674,157 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       return `${size.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
     }
 
+    // ==================== 命令面板（⌘K / Ctrl+K） ====================
+
+    const showCommandPalette = ref(false);
+    const commandQuery = ref('');
+    const selectedCommandIdx = ref(0);
+    const commandInputRef = ref(null);
+
+    /**
+     * 模糊匹配：subsequence + 评分（连续匹配/词边界加权）
+     * 返回 { score, indices } 或 null（未匹配）
+     * 兼容 Windows 中文输入法（query 含 CJK 字符也按字符匹配）
+     */
+    function fuzzyMatch(text, query) {
+      if (!query) return { score: 0, indices: [] };
+      const t = String(text).toLowerCase();
+      const q = String(query).toLowerCase();
+      let ti = 0, qi = 0, score = 0, consecutive = 0;
+      const indices = [];
+      while (ti < t.length && qi < q.length) {
+        if (t[ti] === q[qi]) {
+          indices.push(ti);
+          consecutive++;
+          score += 1 + (consecutive - 1) * 2;
+          const prev = ti > 0 ? t[ti - 1] : '';
+          if (prev === '' || prev === ' ' || prev === '_' || prev === '-' || prev === '/' || prev === '\\' || prev === '.') {
+            score += 5;
+          }
+          qi++;
+        } else {
+          consecutive = 0;
+        }
+        ti++;
+      }
+      if (qi < q.length) return null;
+      // 完全匹配加分
+      if (t.includes(q)) score += 10;
+      return { score, indices };
+    }
+
+    // 静态操作命令（动作类）
+    function buildActionCommands() {
+      return [
+        { id: 'act:dashboard', type: '视图', icon: '🏠', title: '工作台', subtitle: '切换到仪表盘', keywords: 'dashboard home', action: () => switchView('dashboard') },
+        { id: 'act:kanban', type: '视图', icon: '📋', title: '任务看板', subtitle: '查看所有任务', keywords: 'kanban tasks board', action: () => switchView('kanban') },
+        { id: 'act:calendar', type: '视图', icon: '📅', title: '日历视图', subtitle: '月视图 + 甘特图', keywords: 'calendar gantt', action: () => switchView('calendar') },
+        { id: 'act:goals', type: '视图', icon: '🎯', title: '目标列表', subtitle: '管理长期目标', keywords: 'goals', action: () => switchView('goals') },
+        { id: 'act:routines', type: '视图', icon: '🔄', title: '惯例列表', subtitle: '周期性任务模板', keywords: 'routines reports', action: () => switchView('routines') },
+        { id: 'act:notes', type: '视图', icon: '📝', title: '笔记', subtitle: '随手记卡片', keywords: 'notes', action: () => switchView('notes') },
+        { id: 'act:graph', type: '视图', icon: '🕸️', title: '任务图谱', subtitle: '关系可视化', keywords: 'graph network', action: () => switchView('graph') },
+        { id: 'act:settings', type: '视图', icon: '⚙️', title: '设置', subtitle: '应用配置', keywords: 'settings config', action: () => switchView('settings') },
+        { id: 'act:today', type: '筛选', icon: '☀️', title: '今日任务', subtitle: '只看标记为今日的任务', keywords: 'today star', action: () => { filterToday.value = true; switchView('kanban'); } },
+        { id: 'act:newtask', type: '操作', icon: '➕', title: '新建任务', subtitle: '快速创建', keywords: 'new create add task', action: () => openQuickAdd() },
+        { id: 'act:darkmode', type: '操作', icon: darkMode.value ? '☀️' : '🌙', title: darkMode.value ? '切换亮色模式' : '切换深色模式', subtitle: '主题切换', keywords: 'dark light theme', action: () => toggleDarkMode() },
+      ];
+    }
+
+    const commandResults = computed(() => {
+      const q = commandQuery.value.trim();
+      const dynamic = [
+        ...tasks.value.map(t => ({
+          id: `task:${t.id}`, type: '任务', icon: '📌',
+          title: t.title || '(未命名)',
+          subtitle: [t.goal_name, t.routine_name, t.status].filter(Boolean).join(' · '),
+          keywords: t.tags ? t.tags.map(x => x.name).join(' ') : '',
+          action: () => goToTask(t.id),
+        })),
+        ...goals.value.filter(g => !g.archived).map(g => ({
+          id: `goal:${g.id}`, type: '目标', icon: '🎯',
+          title: g.name || '(未命名)',
+          subtitle: g.description || '',
+          action: () => { switchView('goals'); },
+        })),
+        ...routines.value.filter(r => !r.archived).map(r => ({
+          id: `routine:${r.id}`, type: '惯例', icon: '🔄',
+          title: r.name || '(未命名)',
+          subtitle: r.goal_name || '',
+          action: () => { switchView('routines'); },
+        })),
+      ];
+
+      const all = [...buildActionCommands(), ...dynamic];
+
+      if (!q) return all.slice(0, 20);
+
+      const scored = all
+        .map(cmd => {
+          const hay = `${cmd.title} ${cmd.subtitle || ''} ${cmd.keywords || ''}`.trim();
+          const m = fuzzyMatch(hay, q);
+          return m ? { cmd, score: m.score } : null;
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.score - a.score);
+
+      return scored.slice(0, 30).map(s => s.cmd);
+    });
+
+    watch(commandQuery, () => { selectedCommandIdx.value = 0; });
+
+    watch(showCommandPalette, (v) => {
+      if (v) {
+        commandQuery.value = '';
+        selectedCommandIdx.value = 0;
+        nextTick(() => {
+          if (commandInputRef.value) commandInputRef.value.focus();
+        });
+      }
+    });
+
+    function openCommandPalette() {
+      showCommandPalette.value = true;
+    }
+
+    function closeCommandPalette() {
+      showCommandPalette.value = false;
+    }
+
+    function commandMove(delta) {
+      const len = commandResults.value.length;
+      if (len === 0) return;
+      selectedCommandIdx.value = (selectedCommandIdx.value + delta + len) % len;
+      // 滚动到可见
+      nextTick(() => {
+        const el = document.querySelector('.command-item.selected');
+        if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+      });
+    }
+
+    function executeCommand(cmd) {
+      if (!cmd) return;
+      const action = cmd.action;
+      closeCommandPalette();
+      // nextTick 让面板先卸载，避免 action 内打开新 modal 时 overlay 嵌套问题
+      nextTick(() => { if (typeof action === 'function') action(); });
+    }
+
     // ==================== 键盘快捷键 ====================
     function handleKeydown(e) {
+      // ⌘K / Ctrl+K 唤起命令面板（中文输入法下 e.key 可能是 'Process'，用 e.code 兜底）
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K' || e.code === 'KeyK')) {
+        e.preventDefault();
+        if (showCommandPalette.value) closeCommandPalette();
+        else openCommandPalette();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
         e.preventDefault();
         openQuickAdd();
       }
       if (e.key === 'Escape') {
-        if (showQuickAdd.value) showQuickAdd.value = false;
+        if (showCommandPalette.value) closeCommandPalette();
+        else if (showQuickAdd.value) showQuickAdd.value = false;
         else if (showGoalModal.value) showGoalModal.value = false;
         else if (showRoutineModal.value) showRoutineModal.value = false;
         else if (showAIChat.value) closeAIChat();
@@ -3692,6 +4041,67 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
         saveNoteConversations();
         noteChatCardId.value = null;
       }
+    }
+
+    // ==================== AI 从笔记提取任务 ====================
+    const showExtractModal = ref(false);
+    const extractSuggestions = ref([]);
+    const extractingCardId = ref(null);
+    const extractingLoading = ref(false);
+
+    async function extractTasksFromNote(cardId) {
+      if (extractingLoading.value) return;
+      extractingCardId.value = cardId;
+      extractingLoading.value = true;
+      showExtractModal.value = true;
+      extractSuggestions.value = [];
+      try {
+        const data = await api(`/api/notes/${cardId}/extract-tasks`, { method: 'POST' });
+        extractSuggestions.value = data.suggestions || [];
+      } catch (e) {
+        alert('AI 提取失败：' + e.message);
+        showExtractModal.value = false;
+      } finally {
+        extractingLoading.value = false;
+      }
+    }
+
+    function toggleExtractSuggestion(idx) {
+      const s = extractSuggestions.value[idx];
+      if (s) s.selected = !s.selected;
+    }
+
+    async function confirmCreateExtracted() {
+      const selected = extractSuggestions.value.filter(s => s.selected);
+      if (selected.length === 0) {
+        alert('请至少选择一个任务');
+        return;
+      }
+      // 批量创建（high 优先级标记为今日）
+      for (const s of selected) {
+        await api('/api/tasks', {
+          method: 'POST',
+          body: {
+            title: s.title,
+            description: '从笔记提取（AI 建议）' + (s.reason ? '：' + s.reason : ''),
+            status: 'todo',
+            is_today: s.priority === 'high' ? 1 : 0,
+            create_folder: false,
+          },
+        });
+      }
+      await loadTasks();
+      showExtractModal.value = false;
+      extractingCardId.value = null;
+      extractSuggestions.value = [];
+      // 跳转到看板查看新建任务
+      switchView('kanban');
+    }
+
+    function closeExtractModal() {
+      showExtractModal.value = false;
+      extractingCardId.value = null;
+      extractSuggestions.value = [];
     }
 
     function openNoteChat(cardId, cardTitle, cardItems) {
@@ -4157,11 +4567,56 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
     }
 
     async function toggleSubtask(subtask) {
-      await api(`/api/subtasks/${subtask.id}`, {
-        method: 'PUT',
-        body: { status: subtask.status === 'done' ? 'todo' : 'done' }
-      });
-      selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+      try {
+        await api(`/api/subtasks/${subtask.id}`, {
+          method: 'PUT',
+          body: { status: subtask.status === 'done' ? 'todo' : 'done' }
+        });
+        selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+      } catch (e) {
+        // 依赖未完成等错误
+        alert(e.message || '无法完成，请先完成依赖项');
+      }
+    }
+
+    // ==================== 子任务依赖 ====================
+    const editingSubtaskDep = ref(null);
+    const tempSubtaskDep = ref(0);
+
+    function openSubtaskDepEditor(sub) {
+      editingSubtaskDep.value = sub.id;
+      tempSubtaskDep.value = sub.depends_on || 0;
+    }
+
+    function cancelSubtaskDepEditor() {
+      editingSubtaskDep.value = null;
+      tempSubtaskDep.value = 0;
+    }
+
+    async function saveSubtaskDep(sub) {
+      try {
+        await api(`/api/subtasks/${sub.id}`, {
+          method: 'PUT',
+          body: { depends_on: tempSubtaskDep.value || null }
+        });
+        editingSubtaskDep.value = null;
+        selectedTask.value = await api(`/api/tasks/${selectedTask.value.id}`);
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    function getSubtaskDepLabel(sub) {
+      if (!sub.depends_on) return '';
+      const dep = (selectedTask.value.subtasks || []).find(x => x.id === sub.depends_on);
+      if (!dep) return '依赖已删除';
+      return `需先完成：${dep.title}`;
+    }
+
+    function isSubtaskBlocked(sub) {
+      if (!sub.depends_on || sub.status === 'done') return false;
+      const dep = (selectedTask.value.subtasks || []).find(x => x.id === sub.depends_on);
+      return !!(dep && dep.status !== 'done');
     }
 
     async function deleteSubtask(id) {
@@ -4286,6 +4741,18 @@ ${shelved.map(t => `- ${t.title}`).join('\n') || '无'}
       filterStatus, filterGoalId, filterTagIds, filterToday, searchQuery,
       selectedTaskId, selectedTask, analyzingTaskId,
       showQuickAdd, showGoalModal, showRoutineModal, showTimeLog, timeEditing, showImportModal,
+      showCommandPalette, commandQuery, selectedCommandIdx, commandInputRef, commandResults,
+      openCommandPalette, closeCommandPalette, commandMove, executeCommand,
+      heatmapGrid, formatMinutes,
+      briefing, briefingLoading, loadBriefing,
+      showExtractModal, extractSuggestions, extractingCardId, extractingLoading,
+      extractTasksFromNote, toggleExtractSuggestion, confirmCreateExtracted, closeExtractModal,
+      timeSuggestion, timeSuggesting, suggestTime, acceptTimeSuggestion, closeTimeSuggestion,
+      templates, showTemplateSaveModal, newTemplateName, newTemplateIcon,
+      loadTemplates, applyTemplate, openSaveTemplateModal, saveCurrentAsTemplate, deleteTemplate,
+      editingSubtaskDep, tempSubtaskDep,
+      openSubtaskDepEditor, cancelSubtaskDepEditor, saveSubtaskDep,
+      getSubtaskDepLabel, isSubtaskBlocked,
       importDir, importItems, importScanning, importing,
       importSelectedCount, importSelectedAll,
       scanImportDir, toggleImportAll, executeImport,

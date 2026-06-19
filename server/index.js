@@ -260,6 +260,154 @@ app.get('/api/tasks/today', (req, res) => {
   res.json(db.getTodayTasks());
 });
 
+app.get('/api/time-heatmap', (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 365, 30), 730);
+  res.json(db.getTimeHeatmap(days));
+});
+
+// AI 时间估算校准 + 建议
+app.post('/api/tasks/:id/suggest-time', asyncHandler(async (req, res) => {
+  const task = db.getTask(Number(req.params.id));
+  if (!task) return res.status(404).json({ error: '任务不存在' });
+
+  // 收集历史已完成任务（有 estimated + actual）
+  const allTasks = db.getTasks({});
+  const history = allTasks
+    .filter(t => t.id !== task.id && t.status === 'done' && t.estimated_time > 0 && t.actual_time > 0)
+    .slice(0, 50)
+    .map(t => ({
+      title: t.title,
+      estimated: t.estimated_time,
+      actual: t.actual_time,
+      ratio: t.actual_time / t.estimated_time,
+    }));
+
+  // 统计校准
+  let calibration = null;
+  if (history.length > 0) {
+    const ratios = history.map(h => h.ratio).sort((a, b) => a - b);
+    const median = ratios[Math.floor(ratios.length / 2)];
+    const avg = ratios.reduce((a, b) => a + b, 0) / ratios.length;
+    calibration = {
+      count: history.length,
+      medianRatio: Math.round(median * 100) / 100,
+      avgRatio: Math.round(avg * 100) / 100,
+      trend: avg > 1.15 ? 'underestimate' : (avg < 0.85 ? 'overestimate' : 'accurate'),
+    };
+  }
+
+  // AI 建议
+  const aiCfg = readAIConfig();
+  const cfg = aiCfg.configs[aiCfg.activeConfig];
+  if (!cfg || !cfg.base_url || !cfg.model) {
+    return res.json({ calibration, suggestion: null, error: '请先配置 AI 模型' });
+  }
+
+  const historyText = history.length > 0
+    ? `\n历史任务样本（${history.length} 条）：\n${history.slice(0, 15).map(h => `- "${h.title}": 预估${h.estimated}分 → 实际${h.actual}分`).join('\n')}\n用户整体偏差：实际/预估 = ${calibration.avgRatio}（${calibration.trend === 'underestimate' ? '习惯低估' : calibration.trend === 'overestimate' ? '习惯高估' : '估算准确'}）`
+    : '\n暂无历史数据';
+
+  const prompt = `请为以下任务估算合理的预估工时（分钟）：
+
+任务标题：${task.title}
+描述：${task.description || '（无）'}
+背景：${task.context || '（无）'}
+当前预估：${task.estimated_time || 0} 分钟
+${historyText}
+
+要求：
+- 返回一个整数分钟数（常见值：30、60、90、120、180、240、480）
+- 综合考虑任务复杂度 + 用户历史估算偏差（如低估，适当上调）
+- 直接返回数字，不要单位，不要解释文字`;
+
+  try {
+    const result = await aiChatSync(cfg, [
+      { role: 'system', content: '你是项目管理助手。基于任务信息和用户历史偏差，给出合理的工时估算（分钟）。只返回纯数字，不要任何其他文字。' },
+      { role: 'user', content: prompt },
+    ]);
+    const cleaned = result.trim().replace(/[^\d]/g, '');
+    const minutes = parseInt(cleaned, 10);
+    if (isNaN(minutes) || minutes <= 0) {
+      return res.json({ calibration, suggestion: null, error: 'AI 返回格式无法解析' });
+    }
+    res.json({
+      calibration,
+      suggestion: Math.min(Math.max(minutes, 5), 2880), // 5 分 ~ 2 个工作日
+    });
+  } catch (e) {
+    res.json({ calibration, suggestion: null, error: e.message });
+  }
+}));
+
+app.get('/api/daily-briefing', asyncHandler(async (req, res) => {
+  const force = req.query.force === '1' || req.query.force === 'true';
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAgo = new Date();
+  weekAgo.setDate(weekAgo.getDate() - 7);
+
+  const allTasks = db.getTasks({});
+  const todayDue = allTasks.filter(t => t.due_date === today && t.status !== 'done');
+  const inProgress = allTasks.filter(t => t.status === 'in-progress');
+  const shelved = allTasks.filter(t => t.status === 'shelved' && t.updated_at && new Date(t.updated_at) < weekAgo);
+  const overdue = allTasks.filter(t => t.due_date && t.due_date < today && t.status !== 'done' && t.status !== 'shelved');
+  const todayDone = allTasks.filter(t => t.status === 'done' && t.updated_at && t.updated_at.slice(0, 10) === today);
+  const heatmap = db.getTimeHeatmap(1);
+  const todayMinutes = (heatmap[0] || {}).minutes || 0;
+
+  const data = {
+    date: today,
+    stats: {
+      todayDueCount: todayDue.length,
+      todayDueTitles: todayDue.slice(0, 5).map(t => t.title),
+      inProgressCount: inProgress.length,
+      inProgressTitles: inProgress.slice(0, 5).map(t => t.title),
+      shelvedCount: shelved.length,
+      overdueCount: overdue.length,
+      todayDoneCount: todayDone.length,
+      todayMinutes,
+    },
+    aiBriefing: null,
+    aiError: null,
+  };
+
+  // 模板兜底（即使没 AI 配置也有内容）
+  const s = data.stats;
+  const lines = [];
+  if (s.todayDueCount > 0) lines.push(`📌 今日截止 ${s.todayDueCount} 项：${s.todayDueTitles.join('、')}`);
+  if (s.overdueCount > 0) lines.push(`⚠️ 已逾期 ${s.overdueCount} 项，建议优先处理`);
+  if (s.inProgressCount > 0) lines.push(`🚧 进行中 ${s.inProgressCount} 项：${s.inProgressTitles.join('、')}`);
+  if (s.shelvedCount > 0) lines.push(`💤 搁置超 7 天 ${s.shelvedCount} 项，可考虑重新激活或归档`);
+  if (s.todayDoneCount > 0) lines.push(`✅ 今日已完成 ${s.todayDoneCount} 项`);
+  if (s.todayMinutes > 0) lines.push(`⏱️ 今日已计时 ${Math.round(s.todayMinutes)} 分钟`);
+  if (lines.length === 0) lines.push('🌅 今日无截止任务，可以利用空档推进长期目标或学习');
+  data.summary = lines.join('\n');
+
+  // AI 增强（仅 force=true 时调用，避免每次进 dashboard 都消耗 token）
+  const aiCfg = readAIConfig();
+  const cfg = aiCfg.configs[aiCfg.activeConfig];
+  if (force && cfg && cfg.base_url && cfg.model) {
+    try {
+      const prompt = `今天是 ${today}。请基于以下工作数据生成简洁的中文每日简报（3-5 句话，有重点，结尾一句鼓励）：
+
+${data.summary}
+
+格式：
+1. 今日重点：最紧急的 1-3 件事
+2. 提醒：如果有逾期/搁置的潜在风险
+3. 一句话激励`;
+      const result = await aiChatSync(cfg, [
+        { role: 'system', content: '你是一个高效的工作教练。用中文写每日简报，简洁、有洞察、不啰嗦。' },
+        { role: 'user', content: prompt },
+      ]);
+      data.aiBriefing = result.trim();
+    } catch (e) {
+      data.aiError = e.message;
+    }
+  }
+
+  res.json(data);
+}));
+
 app.get('/api/tasks/:id', (req, res) => {
   const task = db.getTask(Number(req.params.id));
   if (!task) return res.status(404).json({ error: '任务不存在' });
@@ -825,7 +973,18 @@ app.post('/api/tasks/:id/subtasks', (req, res) => {
 });
 
 app.put('/api/subtasks/:id', (req, res) => {
-  db.updateSubtask(Number(req.params.id), req.body);
+  const id = Number(req.params.id);
+  // 完成前检查依赖项是否已完成
+  if (req.body.status === 'done') {
+    const check = db.canCompleteSubtask(id);
+    if (!check.ok) {
+      return res.status(400).json({
+        error: `请先完成依赖项：${check.blockedBy.title}`,
+        blockedBy: check.blockedBy,
+      });
+    }
+  }
+  db.updateSubtask(id, req.body);
   res.json({ success: true });
 });
 
@@ -1781,6 +1940,92 @@ app.delete('/api/note-items/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// ==================== 任务模板 ====================
+
+app.get('/api/templates', (req, res) => {
+  res.json(db.getTemplates());
+});
+
+app.post('/api/templates', (req, res) => {
+  const { name, icon, data } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: '模板名不能为空' });
+  const id = db.createTemplate(name.trim(), icon, data);
+  res.json({ id });
+});
+
+app.put('/api/templates/:id', (req, res) => {
+  db.updateTemplate(Number(req.params.id), req.body);
+  res.json({ success: true });
+});
+
+app.delete('/api/templates/:id', (req, res) => {
+  db.deleteTemplate(Number(req.params.id));
+  res.json({ success: true });
+});
+
+// AI 从笔记提取任务建议
+app.post('/api/notes/:id/extract-tasks', asyncHandler(async (req, res) => {
+  const cardId = Number(req.params.id);
+  const cards = db.getNoteCards();
+  const card = cards.find(c => c.id === cardId);
+  if (!card) return res.status(404).json({ error: '笔记不存在' });
+
+  const items = (card.items || []).map(i => `- ${i.content}`).join('\n');
+  if (!items.trim()) return res.status(400).json({ error: '笔记为空，无可提取内容' });
+
+  const aiCfg = readAIConfig();
+  const cfg = aiCfg.configs[aiCfg.activeConfig];
+  if (!cfg || !cfg.base_url || !cfg.model) {
+    return res.status(400).json({ error: '请先在设置中配置 AI 模型' });
+  }
+
+  const prompt = `以下是笔记《${card.title || '未命名'}》的内容：
+
+${items}
+
+请分析这些笔记，提取其中隐含的可执行任务（行动项）。
+返回严格的 JSON 数组，每项格式：
+{"title": "任务标题（动词开头，简洁，15 字内）", "priority": "high|medium|low", "reason": "为什么提取（简短，20 字内）"}
+
+要求：
+- 只提取真正可执行的任务（不是信息/想法/事实陈述）
+- 标题用动词开头（如"整理"、"联系"、"完成"、"调研"）
+- 最多 8 条，按优先级排序
+- 直接返回 JSON 数组，不要 markdown 代码块，不要解释文字`;
+
+  try {
+    const result = await aiChatSync(cfg, [
+      { role: 'system', content: '你是任务提取助手。只返回纯 JSON 数组，不要其他任何文本或 markdown 标记。' },
+      { role: 'user', content: prompt },
+    ]);
+    // 容错：剥离 markdown 代码块包裹 + 提取第一个 JSON 数组
+    let cleaned = result.trim();
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/,'');
+    const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
+    if (jsonMatch) cleaned = jsonMatch[0];
+    let suggestions;
+    try {
+      suggestions = JSON.parse(cleaned);
+    } catch (e) {
+      return res.status(500).json({ error: 'AI 返回格式无法解析，请重试' });
+    }
+    if (!Array.isArray(suggestions)) suggestions = [];
+    // 清洗 + 标准化
+    suggestions = suggestions
+      .filter(s => s && typeof s.title === 'string' && s.title.trim())
+      .slice(0, 10)
+      .map(s => ({
+        title: String(s.title).trim().slice(0, 100),
+        priority: ['high', 'medium', 'low'].includes(s.priority) ? s.priority : 'medium',
+        reason: String(s.reason || '').slice(0, 100),
+        selected: true,
+      }));
+    res.json({ suggestions });
+  } catch (e) {
+    res.status(500).json({ error: 'AI 调用失败: ' + e.message });
+  }
+}));
+
 // ==================== 日报/周报 ====================
 
 app.get('/api/reports', (req, res) => {
@@ -1805,6 +2050,22 @@ app.get('/api/report-meetings', (req, res) => {
 
 app.use((err, req, res, next) => {
   console.error('未捕获错误:', err);
+  // multer 上传错误友好化（默认英文 + 堆栈，对用户不友好）
+  if (err.name === 'MulterError') {
+    let msg = '上传失败';
+    if (err.code === 'LIMIT_FILE_SIZE') msg = `文件过大（上限 100MB）${err.field ? '：' + err.field : ''}`;
+    else if (err.code === 'LIMIT_FILE_COUNT') msg = '上传文件数过多（上限 20 个）';
+    else if (err.code === 'LIMIT_UNEXPECTED_FILE') msg = `上传字段不符预期${err.field ? '：' + err.field : ''}`;
+    else if (err.code === 'LIMIT_PART_COUNT') msg = '上传表单字段过多';
+    else if (err.code === 'LIMIT_FIELD_KEY') msg = '字段名过长';
+    else if (err.code === 'LIMIT_FIELD_VALUE') msg = '字段值过长';
+    else msg = `上传错误：${err.message}`;
+    return res.status(400).json({ error: msg, code: err.code });
+  }
+  // JSON 解析错误
+  if (err.type === 'entity.parse.failed' || err.type === 'entity.too.large') {
+    return res.status(400).json({ error: '请求体格式错误或过大' });
+  }
   res.status(500).json({ error: err.message || '服务器内部错误' });
 });
 

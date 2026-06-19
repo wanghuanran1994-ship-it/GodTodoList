@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GodTodoList - 事项管理体系</title>
-  <link rel="stylesheet" href="/css/style.css?v=56">
+  <link rel="stylesheet" href="/css/style.css?v=64">
 </head>
 <body>
   <!-- 页面加载过渡：Vue 接管前显示，避免 v-if 弹窗闪烁 -->
@@ -123,6 +123,52 @@
             </div>
           </div>
 
+          <!-- 每日简报 -->
+          <div class="briefing-panel" v-if="briefing">
+            <div class="briefing-header">
+              <div class="briefing-title-row">
+                <span class="briefing-icon">{{ new Date().getHours() < 12 ? '☀️' : (new Date().getHours() < 18 ? '🌤️' : '🌙') }}</span>
+                <div>
+                  <div class="briefing-title">{{ new Date().getHours() < 12 ? '早安，王博' : (new Date().getHours() < 18 ? '下午好，王博' : '晚上好，王博') }}</div>
+                  <div class="briefing-date">{{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }) }}</div>
+                </div>
+              </div>
+              <button class="btn btn-xs" @click="loadBriefing(true)" :disabled="briefingLoading" title="重新生成 AI 简报">
+                {{ briefingLoading ? '⏳' : '🔄 刷新' }}
+              </button>
+            </div>
+            <div class="briefing-body">
+              <div v-if="briefingLoading" class="briefing-loading">
+                <span class="briefing-spinner"></span>
+                正在为你生成今日简报...
+              </div>
+              <div v-else-if="briefing.aiBriefing" class="briefing-ai" v-html="renderMarkdown(briefing.aiBriefing)"></div>
+              <div v-else class="briefing-fallback">
+                <pre>{{ briefing.summary }}</pre>
+                <div class="briefing-hint" v-if="briefing.aiError">⚠️ AI 生成失败：{{ briefing.aiError }}（可在设置中检查配置）</div>
+                <div class="briefing-hint" v-else>💡 配置 AI 模型后可获得智能简报</div>
+              </div>
+            </div>
+            <div class="briefing-stats">
+              <div class="briefing-stat" @click="switchView('kanban'); filterStatus = 'in-progress'">
+                <span class="briefing-stat-num">{{ briefing.stats.inProgressCount }}</span>
+                <span class="briefing-stat-label">进行中</span>
+              </div>
+              <div class="briefing-stat" @click="switchView('kanban'); filterStatus = 'todo'">
+                <span class="briefing-stat-num">{{ briefing.stats.todayDueCount }}</span>
+                <span class="briefing-stat-label">今日截止</span>
+              </div>
+              <div class="briefing-stat warn" v-if="briefing.stats.overdueCount > 0">
+                <span class="briefing-stat-num">{{ briefing.stats.overdueCount }}</span>
+                <span class="briefing-stat-label">已逾期</span>
+              </div>
+              <div class="briefing-stat" v-if="briefing.stats.todayDoneCount > 0">
+                <span class="briefing-stat-num">{{ briefing.stats.todayDoneCount }}</span>
+                <span class="briefing-stat-label">今日完成</span>
+              </div>
+            </div>
+          </div>
+
           <!-- 三栏任务区 -->
           <div class="dash-grid">
             <div class="dash-panel">
@@ -169,6 +215,35 @@
                 <button class="btn btn-xs" style="margin-top:8px" @click="analyzePressure">🔄 重新讨论</button>
               </div>
               <div class="dash-empty" v-else>点击「与军师讨论」通过多轮对话梳理压力来源和破局关键</div>
+            </div>
+          </div>
+
+          <!-- 年度时间热力图 -->
+          <div class="heatmap-panel">
+            <div class="heatmap-header">
+              <div>
+                <div class="heatmap-title">🔥 时间热力图</div>
+                <div class="heatmap-summary">过去一年累计 {{ formatMinutes(heatmapGrid.totalMinutes) }}</div>
+              </div>
+              <div class="heatmap-legend">
+                <span>少</span>
+                <div class="heatmap-legend-cells">
+                  <div class="heatmap-cell level-0"></div>
+                  <div class="heatmap-cell level-1"></div>
+                  <div class="heatmap-cell level-2"></div>
+                  <div class="heatmap-cell level-3"></div>
+                  <div class="heatmap-cell level-4"></div>
+                </div>
+                <span>多</span>
+              </div>
+            </div>
+            <div class="heatmap-grid">
+              <div class="heatmap-week" v-for="(week, wi) in heatmapGrid.weeks" :key="wi">
+                <div v-for="cell in week" :key="cell.date"
+                     class="heatmap-cell"
+                     :class="[`level-${cell.level}`, { future: cell.isFuture }]"
+                     :title="cell.date + (cell.minutes ? ' · ' + formatMinutes(cell.minutes) : ' · 无记录')"></div>
+              </div>
             </div>
           </div>
 
@@ -657,6 +732,11 @@
                        @keyup.enter="$event.target.blur()"
                        @input="fitTitleWidth($event.target)"
                        class="note-card-title">
+                <button class="note-card-extract" @click="extractTasksFromNote(card.id)"
+                        :disabled="extractingCardId === card.id && extractingLoading"
+                        title="AI 提取任务">
+                  {{ extractingCardId === card.id && extractingLoading ? '⏳' : '🎯' }}
+                </button>
                 <button class="note-card-chat" @click="openNoteChat(card.id, card.title, card.items)"
                         :title="noteConversations[card.id] ? '继续对话' : 'AI 对话'">
                   {{ noteConversations[card.id] ? '💬' : '✨' }}
@@ -1276,6 +1356,25 @@
                          @blur="timeEditing.actual = false; saveSelectedTask()" min="0" title="分钟">
                 </div>
                 <button class="btn btn-sm" @click="showTimeLog = !showTimeLog">记录</button>
+                <button class="btn btn-sm" @click="suggestTime" :disabled="timeSuggesting" title="基于历史数据 + 任务内容给出建议">
+                  {{ timeSuggesting ? '⏳' : '🤖 建议' }}
+                </button>
+              </div>
+              <div class="time-suggestion-row" v-if="timeSuggestion">
+                <template v-if="timeSuggestion.error">
+                  <span class="time-suggestion-error">⚠️ {{ timeSuggestion.error }}</span>
+                  <button class="btn btn-xs" @click="closeTimeSuggestion">×</button>
+                </template>
+                <template v-else-if="timeSuggestion.suggestion">
+                  <span class="time-suggestion-icon">🤖</span>
+                  <span class="time-suggestion-label">AI 建议</span>
+                  <span class="time-suggestion-value">{{ formatTime(timeSuggestion.suggestion) }}</span>
+                  <span class="time-suggestion-calibration" v-if="timeSuggestion.calibration">
+                    历史偏差 {{ timeSuggestion.calibration.avgRatio }}× · {{ timeSuggestion.calibration.trend === 'underestimate' ? '你习惯低估' : timeSuggestion.calibration.trend === 'overestimate' ? '你习惯高估' : '估算准确' }}（{{ timeSuggestion.calibration.count }} 样本）
+                  </span>
+                  <button class="btn btn-xs btn-primary" @click="acceptTimeSuggestion">采纳</button>
+                  <button class="btn btn-xs" @click="closeTimeSuggestion">放弃</button>
+                </template>
               </div>
               <div class="time-log-input" v-if="showTimeLog">
                 <input type="number" v-model.number="timeLogDuration" class="input" placeholder="分钟" min="1">
@@ -1296,12 +1395,27 @@
           <div class="detail-tab-pane" v-show="activeDetailTab === 'subtask'">
             <div class="detail-section">
               <div class="subtask-list" v-if="selectedTask.subtasks && selectedTask.subtasks.length">
-                <div class="subtask-item" v-for="sub in selectedTask.subtasks" :key="sub.id">
+                <div class="subtask-item" v-for="sub in selectedTask.subtasks" :key="sub.id"
+                     :class="{ 'subtask-blocked': isSubtaskBlocked(sub) }">
                   <label class="subtask-check">
                     <input type="checkbox" :checked="sub.status === 'done'" @change="toggleSubtask(sub)">
                     <span :class="{ done: sub.status === 'done' }">{{ sub.title }}</span>
                   </label>
-                  <button class="btn-icon btn-danger-icon btn-xs" @click="deleteSubtask(sub.id)">×</button>
+                  <span class="subtask-dep-label" v-if="getSubtaskDepLabel(sub)" :title="getSubtaskDepLabel(sub)">
+                    ⛔ {{ getSubtaskDepLabel(sub) }}
+                  </span>
+                  <template v-if="editingSubtaskDep === sub.id">
+                    <select class="subtask-dep-select" v-model.number="tempSubtaskDep">
+                      <option :value="0">无依赖</option>
+                      <option v-for="other in selectedTask.subtasks.filter(x => x.id !== sub.id)" :key="other.id" :value="other.id">
+                        {{ other.title }}
+                      </option>
+                    </select>
+                    <button class="btn btn-xs btn-primary" @click="saveSubtaskDep(sub)">确定</button>
+                    <button class="btn btn-xs" @click="cancelSubtaskDepEditor">取消</button>
+                  </template>
+                  <button v-else class="btn-icon btn-xs subtask-dep-btn" @click="openSubtaskDepEditor(sub)" title="设置依赖">🔗</button>
+                  <button class="btn-icon btn-danger-icon btn-xs" @click="deleteSubtask(sub.id)" title="删除">×</button>
                 </div>
               </div>
               <div class="subtask-add">
@@ -1463,6 +1577,15 @@
           <button class="btn-icon" @click="showQuickAdd = false">×</button>
         </div>
         <div class="modal-body quick-add-body">
+          <!-- 模板工具条 -->
+          <div class="quick-add-toolbar" v-if="templates.length || true">
+            <select class="template-select" @change="applyTemplate($event.target.value); $event.target.value=''" v-if="templates.length">
+              <option value="">📂 从模板加载...</option>
+              <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.icon }} {{ t.name }}</option>
+            </select>
+            <span class="quick-add-toolbar-spacer" v-else></span>
+            <button type="button" class="btn btn-xs" @click="openSaveTemplateModal" title="把当前字段保存为模板">💾 存为模板</button>
+          </div>
           <!-- 任务描述 + AI推理 -->
           <div class="form-group" style="grid-column:1/-1">
             <label><i class="label-icon">📝</i>任务描述 <span class="hint-text">先描述，AI 推理自动填充下方属性</span></label>
@@ -1717,6 +1840,109 @@
       </div>
     </div>
 
+    <!-- ========== 保存任务模板 ========== -->
+    <div class="modal-overlay" v-if="showTemplateSaveModal" @click.self="showTemplateSaveModal = false">
+      <div class="modal" style="width: 420px; max-width: 92vw">
+        <div class="modal-header">
+          <h3>💾 保存为模板</h3>
+          <button class="btn-icon" @click="showTemplateSaveModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label><i class="label-icon">📛</i>模板名称</label>
+            <input v-model="newTemplateName" class="input" placeholder="例如：周报、需求评审、Code Review" maxlength="50">
+          </div>
+          <div class="form-group">
+            <label><i class="label-icon">🎨</i>图标（一个 emoji）</label>
+            <input v-model="newTemplateIcon" class="input" placeholder="📦" maxlength="2" style="width: 80px">
+          </div>
+          <p class="hint-text" style="margin-top: 8px">将保存当前表单字段（描述、目标、惯例、标签、工时、人员等），下次新建时一键应用。</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" @click="showTemplateSaveModal = false">取消</button>
+          <button class="btn btn-primary" @click="saveCurrentAsTemplate">保存模板</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== AI 从笔记提取任务 ========== -->
+    <div class="modal-overlay" v-if="showExtractModal" @click.self="closeExtractModal">
+      <div class="modal extract-modal">
+        <div class="modal-header">
+          <h3>🎯 AI 提取任务建议</h3>
+          <button class="modal-close" @click="closeExtractModal">×</button>
+        </div>
+        <div class="extract-body">
+          <div v-if="extractingLoading" class="extract-loading">
+            <span class="briefing-spinner"></span>
+            AI 正在分析笔记内容...
+          </div>
+          <div v-else-if="extractSuggestions.length === 0" class="extract-empty">
+            <span style="font-size:36px;display:block;margin-bottom:8px">🤔</span>
+            没有识别到可执行任务
+          </div>
+          <div v-else class="extract-suggestions">
+            <div v-for="(s, i) in extractSuggestions" :key="i"
+                 class="extract-item" :class="{ selected: s.selected, [`priority-${s.priority}`]: true }"
+                 @click="toggleExtractSuggestion(i)">
+              <span class="extract-check">{{ s.selected ? '☑' : '☐' }}</span>
+              <div class="extract-content">
+                <div class="extract-title">{{ s.title }}</div>
+                <div class="extract-reason" v-if="s.reason">{{ s.reason }}</div>
+              </div>
+              <span class="extract-priority" :class="`priority-${s.priority}`">
+                {{ s.priority === 'high' ? '高' : (s.priority === 'medium' ? '中' : '低') }}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer" v-if="!extractingLoading && extractSuggestions.length > 0">
+          <span class="extract-summary">已选 {{ extractSuggestions.filter(s => s.selected).length }} / {{ extractSuggestions.length }}</span>
+          <button class="btn btn-primary" @click="confirmCreateExtracted">创建选中任务</button>
+          <button class="btn" @click="closeExtractModal">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 命令面板（⌘K / Ctrl+K） ========== -->
+    <div class="modal-overlay command-overlay" v-if="showCommandPalette" @click.self="closeCommandPalette">
+      <div class="command-palette" @click.stop>
+        <div class="command-input-wrap">
+          <span class="command-input-icon">🔍</span>
+          <input ref="commandInputRef" v-model="commandQuery"
+                 @keydown.up.prevent="commandMove(-1)"
+                 @keydown.down.prevent="commandMove(1)"
+                 @keydown.enter.prevent="executeCommand(commandResults[selectedCommandIdx])"
+                 @keydown.esc.prevent="closeCommandPalette()"
+                 placeholder="搜索任务、目标、惯例或操作..."
+                 autocomplete="off" spellcheck="false"
+                 class="command-input">
+          <kbd class="command-esc-hint">ESC</kbd>
+        </div>
+        <div class="command-list">
+          <div v-for="(cmd, i) in commandResults" :key="cmd.id"
+               class="command-item" :class="{ selected: i === selectedCommandIdx }"
+               @click="executeCommand(cmd)" @mouseenter="selectedCommandIdx = i">
+            <span class="command-item-icon">{{ cmd.icon }}</span>
+            <div class="command-item-body">
+              <div class="command-item-title">{{ cmd.title }}</div>
+              <div class="command-item-subtitle" v-if="cmd.subtitle">{{ cmd.subtitle }}</div>
+            </div>
+            <span class="command-item-type">{{ cmd.type }}</span>
+          </div>
+          <div v-if="commandResults.length === 0" class="command-empty">
+            <span style="font-size:36px;display:block;margin-bottom:8px">🔍</span>
+            未找到匹配项
+          </div>
+        </div>
+        <div class="command-footer">
+          <span class="command-footer-hint"><kbd>↑</kbd><kbd>↓</kbd> 导航</span>
+          <span class="command-footer-hint"><kbd>↵</kbd> 执行</span>
+          <span class="command-footer-hint"><kbd>esc</kbd> 关闭</span>
+        </div>
+      </div>
+    </div>
+
     <!-- ========== AI 军师浮动按钮 & 面板 ========== -->
     <button class="ai-fab" @click="showAIChat = !showAIChat" :class="{ active: showAIChat }" title="AI 军师">
       🤖
@@ -1787,6 +2013,6 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
-  <script src="/js/app.js?v=80"></script>
+  <script src="/js/app.js?v=88"></script>
 </body>
 </html>

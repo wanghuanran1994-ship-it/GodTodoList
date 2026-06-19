@@ -137,15 +137,20 @@ function writeTaskReadme(task, goals, routines, tags) {
         body = old;
       }
     } catch (e) { /* ignore */ }
-    try {
-      fs.writeFileSync(readmePath, fmBlock + body, 'utf-8');
-    } catch (e) {
-      console.error('写 README 失败:', e.message);
+
+    // body 非空 → 保留用户已有正文
+    if (body.trim()) {
+      try {
+        fs.writeFileSync(readmePath, fmBlock + body, 'utf-8');
+      } catch (e) {
+        console.error('写 README 失败:', e.message);
+      }
+      return;
     }
-    return;
+    // body 为空（老任务只有 frontmatter）→ 落到下方重新生成完整正文
   }
 
-  // 新 README：生成 AI 友好的全面介绍
+  // 新 README（或老任务 body 为空）：生成 AI 友好的全面介绍
   const statusMap = { todo: '待办', 'in-progress': '进行中', done: '已完成', shelved: '搁置' };
   const now = new Date();
   let body = '';
@@ -226,6 +231,45 @@ function writeTaskReadme(task, goals, routines, tags) {
   }
 }
 
+// 解析 YAML 标量：剥离引号（双引号支持 \" \\ 转义，单引号 '' 转义）
+function parseYamlScalar(s) {
+  if (!s) return '';
+  if (s.startsWith('"') && s.endsWith('"')) {
+    return s.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  if (s.startsWith("'") && s.endsWith("'")) {
+    return s.slice(1, -1).replace(/''/g, "'");
+  }
+  return s;
+}
+
+// 解析单行 YAML 数组：[a, b, "c with, comma", 'd']
+// 不引号的值不能含逗号；引号值可含任意字符（包括逗号）
+function parseYamlInlineArray(text) {
+  const inner = text.slice(1, -1).trim();
+  if (!inner) return [];
+  const items = [];
+  let cur = '';
+  let quote = null;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (quote) {
+      cur += ch;
+      if (ch === quote && inner[i - 1] !== '\\') quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+    } else if (ch === ',') {
+      items.push(cur.trim());
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim()) items.push(cur.trim());
+  return items.map(parseYamlScalar).filter(s => s !== '');
+}
+
 function parseReadme(filePath) {
   if (!fs.existsSync(filePath)) return null;
 
@@ -254,6 +298,9 @@ function parseReadme(filePath) {
       currentArrayKey = null;
       if (val === '[]') {
         fm[key] = [];
+      } else if (val.startsWith('[') && val.endsWith(']')) {
+        // 单行 YAML 数组: [a, b, "c"]
+        fm[key] = parseYamlInlineArray(val);
       } else if (val === '' && (key === 'people' || key === 'tags' || key === 'paths')) {
         fm[key] = [];
         currentArrayKey = key;

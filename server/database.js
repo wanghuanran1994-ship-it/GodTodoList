@@ -131,6 +131,8 @@ function createTables() {
     created_at TEXT,
     updated_at TEXT
   )`);
+  // migration: 子任务依赖（指向同任务下另一个 subtask 的 id；完成前必须先完成被依赖项）
+  try { db.run('ALTER TABLE subtasks ADD COLUMN depends_on INTEGER'); } catch(e) { /* already exists */ }
 
   db.run(`CREATE TABLE IF NOT EXISTS contacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -233,6 +235,16 @@ function createTables() {
     type TEXT NOT NULL,
     content TEXT DEFAULT '',
     created_at TEXT
+  )`);
+
+  // 任务模板（快速新建任务的预设字段集合）
+  db.run(`CREATE TABLE IF NOT EXISTS templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    icon TEXT DEFAULT '📦',
+    data TEXT DEFAULT '{}',
+    created_at TEXT,
+    updated_at TEXT
   )`);
 
   // 索引
@@ -567,6 +579,18 @@ function getTasks(filters = {}) {
     sql += ' AND id IN (SELECT task_id FROM task_tags WHERE tag_id = ?)';
     params.push(Number(filters.tag_id));
   }
+  if (filters.tag_ids) {
+    // 多标签 OR 筛选（任一标签命中即返回）
+    const ids = String(filters.tag_ids).split(',').map(s => parseInt(s, 10)).filter(n => !isNaN(n));
+    if (ids.length === 1) {
+      sql += ' AND id IN (SELECT task_id FROM task_tags WHERE tag_id = ?)';
+      params.push(ids[0]);
+    } else if (ids.length > 1) {
+      const placeholders = ids.map(() => '?').join(',');
+      sql += ` AND id IN (SELECT task_id FROM task_tags WHERE tag_id IN (${placeholders}))`;
+      params.push(...ids);
+    }
+  }
   if (filters.search) {
     sql += ' AND (title LIKE ? OR description LIKE ? OR context LIKE ?)';
     const term = `%${filters.search}%`;
@@ -574,6 +598,12 @@ function getTasks(filters = {}) {
   }
   if (filters.is_report) {
     sql += ' AND is_report = 1';
+  }
+  // 默认隐藏归档目标/惯例下的任务（避免"悬空任务"）
+  // 显式传 include_archived_parents=1 才包含（如归档视图）
+  if (!filters.include_archived_parents) {
+    sql += ' AND (goal_id IS NULL OR goal_id IN (SELECT id FROM goals WHERE archived = 0))';
+    sql += ' AND (routine_id IS NULL OR routine_id IN (SELECT id FROM routines WHERE archived = 0))';
   }
 
   sql += ' ORDER BY sort_order, created_at DESC';
@@ -900,6 +930,22 @@ function getTimeStats(days = 30) {
   GROUP BY DATE(updated_at) ORDER BY date DESC`, [sinceStr]);
 }
 
+// 年度时间热力图：按日聚合 time_logs 的 duration（分钟）
+// 返回 [{ date: 'YYYY-MM-DD', minutes: N }, ...]（只含有数据的日期）
+function getTimeHeatmap(days = 365) {
+  const since = new Date();
+  since.setDate(since.getDate() - days);
+  const sinceStr = since.toISOString().slice(0, 10);
+  return queryAll(
+    `SELECT DATE(logged_at) as date, COALESCE(SUM(duration), 0) as minutes
+     FROM time_logs
+     WHERE logged_at IS NOT NULL AND DATE(logged_at) >= ?
+     GROUP BY DATE(logged_at)
+     ORDER BY date`,
+    [sinceStr]
+  ).map(r => ({ date: r.date, minutes: r.minutes || 0 }));
+}
+
 function getReviewData(type = 'daily') {
   const days = type === 'weekly' ? 7 : 1;
   return {
@@ -958,23 +1004,39 @@ function getSubtasks(taskId) {
 }
 
 function createSubtask(taskId, d) {
-  db.run('INSERT INTO subtasks (task_id, title, status, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-    [taskId, d.title, d.status || 'todo', d.sort_order || 0, now(), now()]);
+  db.run('INSERT INTO subtasks (task_id, title, status, sort_order, depends_on, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [taskId, d.title, d.status || 'todo', d.sort_order || 0, d.depends_on || null, now(), now()]);
   save();
   const id = queryOne('SELECT last_insert_rowid() as id').id;
-  return { id, task_id: taskId, title: d.title, status: 'todo' };
+  return { id, task_id: taskId, title: d.title, status: 'todo', depends_on: d.depends_on || null };
 }
 
 function updateSubtask(id, d) {
   const fields = []; const params = [];
-  for (const k of ['title', 'status', 'sort_order']) {
-    if (d[k] !== undefined) { fields.push(`${k} = ?`); params.push(d[k]); }
+  for (const k of ['title', 'status', 'sort_order', 'depends_on']) {
+    if (d[k] !== undefined) {
+      fields.push(`${k} = ?`);
+      // depends_on: 0 / null / undefined 都视为无依赖
+      params.push(k === 'depends_on' ? (d[k] || null) : d[k]);
+    }
   }
   if (!fields.length) return;
   fields.push('updated_at = ?'); params.push(now());
   params.push(id);
   db.run(`UPDATE subtasks SET ${fields.join(', ')} WHERE id = ?`, params);
   save();
+}
+
+// 检查子任务是否可完成（依赖项必须先完成）
+function canCompleteSubtask(id) {
+  const sub = queryOne('SELECT depends_on FROM subtasks WHERE id = ?', [id]);
+  if (!sub || !sub.depends_on) return { ok: true };
+  const dep = queryOne('SELECT id, title, status FROM subtasks WHERE id = ?', [sub.depends_on]);
+  if (!dep) return { ok: true }; // 依赖项被删除，视为可完成
+  if (dep.status !== 'done') {
+    return { ok: false, blockedBy: dep };
+  }
+  return { ok: true };
 }
 
 function deleteSubtask(id) {
@@ -1187,6 +1249,45 @@ function deleteNoteItem(id) {
   save();
 }
 
+// ==================== 任务模板 ====================
+
+function getTemplates() {
+  return queryAll('SELECT * FROM templates ORDER BY id DESC').map(t => ({
+    id: t.id,
+    name: t.name,
+    icon: t.icon || '📦',
+    data: safeJsonParse(t.data, {}),
+    created_at: t.created_at,
+    updated_at: t.updated_at,
+  }));
+}
+
+function createTemplate(name, icon, data) {
+  const ts = now();
+  db.run('INSERT INTO templates (name, icon, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    [String(name || '模板').slice(0, 50), icon || '📦', JSON.stringify(data || {}), ts, ts]);
+  save();
+  return queryOne('SELECT last_insert_rowid() as id').id;
+}
+
+function updateTemplate(id, patch) {
+  const fields = [];
+  const params = [];
+  if (patch.name !== undefined) { fields.push('name = ?'); params.push(String(patch.name).slice(0, 50)); }
+  if (patch.icon !== undefined) { fields.push('icon = ?'); params.push(patch.icon || '📦'); }
+  if (patch.data !== undefined) { fields.push('data = ?'); params.push(JSON.stringify(patch.data || {})); }
+  if (!fields.length) return;
+  fields.push('updated_at = ?'); params.push(now());
+  params.push(id);
+  db.run(`UPDATE templates SET ${fields.join(', ')} WHERE id = ?`, params);
+  save();
+}
+
+function deleteTemplate(id) {
+  db.run('DELETE FROM templates WHERE id = ?', [id]);
+  save();
+}
+
 // ==================== 日报/周报 ====================
 
 function getReports(type) {
@@ -1231,7 +1332,9 @@ module.exports = {
   addAttachment, deleteAttachment,
   addTimeLog,
   getAIContext,
-  getGoalStats, getTimeStats, getReviewData,
+  getGoalStats, getTimeStats, getReviewData, getTimeHeatmap,
+  getTemplates, createTemplate, updateTemplate, deleteTemplate,
+  canCompleteSubtask,
   // Contacts
   getContacts, createContact, updateContact, deleteContact,
   // Subtasks
