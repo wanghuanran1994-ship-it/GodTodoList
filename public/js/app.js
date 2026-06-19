@@ -2631,7 +2631,11 @@ createApp({
       await loadNoteCards();
     }
     async function renameCard(cardId, title) {
-      await api(`/api/note-cards/${cardId}`, { method: 'PUT', body: { title: title?.trim() || '未命名' } });
+      const finalTitle = title?.trim() || '未命名';
+      await api(`/api/note-cards/${cardId}`, { method: 'PUT', body: { title: finalTitle } });
+      // ⚠️ 必须同步本地 reactive state，否则 input :value="card.title" 单向绑定会用旧值覆盖用户输入
+      const card = noteCards.value.find(c => c.id === cardId);
+      if (card) card.title = finalTitle;
       // 标题变化 → 重算该卡片 minWidth，否则缩小卡片时标题会被裁切
       nextTick(() => {
         const el = document.querySelector(`.note-card[data-card-id="${cardId}"]`);
@@ -2640,6 +2644,9 @@ createApp({
           cardSizes.value[cardId] = { ...cardSizes.value[cardId], mw };
           debouncedSaveCardSizes();
         }
+        // 重算宽度时也要用新标题
+        const titleInput = el?.querySelector('.note-card-title');
+        if (titleInput) fitTitleWidth(titleInput);
       });
     }
     async function updateCardCategory(cardId, category) {
